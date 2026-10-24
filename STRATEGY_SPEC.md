@@ -43,3 +43,20 @@ Drawdown `dd = (ATH - Close) / ATH`. Vyhodnocují se pouze SPY a QQQ a při dosa
 - Slippage na nákup zvyšuje fill cenu; na prodeji ji snižuje.
 - Cash interest je default 0 %.
 - Yahoo Finance = HISTORICAL; žádné předstírání live dat. IBKR v této verzi = read-only historie a order preview.
+
+
+## 6. TEMACD sektorová a beta rotace
+
+TEMACD je samostatný výzkumný modul a nenahrazuje ALM ani DRBL Matrix.
+
+- **Core universe:** SPY, QQQ, XLK, XLY, XLI, XLV, XLF, XLE, XLP, XLU.
+- **Agresivní universe:** TQQQ, SOXL, SMH, BTC-USD, ETH-USD, SOL-USD.
+- **Signál:** TEMA-MACD Fast 30 / Slow 80 / Signal 15; EMA1/EMA2/EMA3 10/30/120; RSI(14); ATR(20); způsobilost pouze při close nad EMA3 a kladném TEMACD histogramu.
+- **Rotace:** Top N podle kombinace RSI a normalizovaného TEMACD histogramu; měsíční výchozí perioda, volitelně týdenní.
+- **ATR sizing:** surová váha = cílový risk / ATR%; limit na aktivum 35 %; součet váh nejvýše 100 %; nealokovaná část zůstává v cash.
+- **Náklady a exekuce:** signál na Close(t), simulace na Open(t+1), 0,05 % per side jako výchozí transakční náklad; žádné look-ahead.
+- **Výstup:** equity vs. SPY Buy & Hold, metriky, obchody po nákladech, rebalanční log, ATR% a zvolené váhy.
+- **Metriky na 1/3/5/10/20/30 let:** spustí scripts/run_temacd_period_table.py; nepodložené výsledky se nezobrazují jako skutečné. Dlouhá období musí vykázat dostupnost jednotlivých tickerů; aktuální ETF/crypto universe neexistoval po celých 30 let.
+- **Dokumentace:** TEMACD_ROTATION_AGENT_PROMPT.md a PERFORMANCE_METRICS.md.
+
+Neověřené modelové metriky (CAGR, Sharpe, MaxDD, Profit Factor) z uživatelského návrhu se nepoužívají jako backtestové výsledky. Ziskovost, drawdown a rizikové poměry musí být vypočteny na přesných historických datech s náklady a následně ověřeny out-of-sample.
