@@ -1,26 +1,32 @@
-# Zveřejnění v novém GitHub repozitáři
+# GitHub — DRBL Matrix Platform
 
-**Tento projekt není propojený se starým `Matthew-pros/es_trading_dashboard`.** Dostupné operace připojeného GitHub konektoru neobsahují vytvoření nového repozitáře. Proto nelze poctivě uvést nový GitHub link, dokud se nový vzdálený repozitář nevytvoří.
+Hlavní repozitář projektu je **https://github.com/Matthew-pros/drbl-matrix-platform**. TEMACD modul, datové providery, Streamlit stránka, detailní zadání a skript pro metriky za 1/3/5/10/20/30 let jsou do repozitáře přidané.
 
-## Varianta A — GitHub CLI
-
-1. Na GitHubu vytvoř prázdný repozitář `drbl-matrix-platform` bez README/licence (například `https://github.com/new`).
-2. V terminálu uvnitř tohoto rozbaleného adresáře spusť:
+## Aktualizace lokální kopie
 
 ```bash
-git init -b main
-git add .
-git commit -m "Initial DRBL Matrix Platform project"
-gh auth login
-gh repo create Matthew-pros/drbl-matrix-platform --public --source . --remote origin --push
+git clone https://github.com/Matthew-pros/drbl-matrix-platform.git
+cd drbl-matrix-platform
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
+pip install -e ".[dev]"
+streamlit run app.py
 ```
 
-Pokud jsi repozitář vytvořil pod jiným vlastníkem/názvem, nahraď `Matthew-pros/drbl-matrix-platform` správným `owner/name`.
+Streamlit Community Cloud používá jako Main file path `app.py`. Nová sekce TEMACD je dostupná přes `pages/06_TEMACD_Rotation.py`.
 
-## Varianta B — web GitHub
+## Historické metriky
 
-1. Vytvoř prázdný nový repozitář.
-2. Ve svém počítači inicializuj Git a vytvoř commit (`git init -b main`, `git add .`, `git commit -m "Initial DRBL Matrix Platform project"`).
-3. Přidej novou remote URL podle GitHub instrukcí (`git remote add origin https://github.com/OWNER/REPO.git`) a spusť `git push -u origin main`.
+```bash
+python scripts/run_temacd_period_table.py --end 2026-10-24 --warmup-years 3
+```
 
-Nikde nevkládej token nebo heslo do zdrojových souborů. `.env`, lokální SQLite data a cache jsou ignorovány přes `.gitignore`.
+Skript vytvoří CSV/Markdown tabulku, coverage historii, equity CSV a HTML grafy vs. SPY. Skutečné výkonnostní hodnoty se musí vypočítat z dostupných historických dat; čísla z původního návrhu jsou pouze neověřená hypotéza.
+
+## Datové zdroje
+
+- Streamlit Cloud: Yahoo Finance přes `yfinance` (historická denní data, ne garantovaný live feed).
+- Vlastní VPS: IBKR Gateway pro historická/read-only data. V této verzi aplikace neposílá skutečné objednávky.
+
+Nepřidávej `.env`, přihlašovací údaje, broker tokeny ani osobní databázi do Gitu.
