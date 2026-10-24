@@ -1,0 +1,1 @@
+"""Samostatné pravidlové modely."""
