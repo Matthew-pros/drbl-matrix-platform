@@ -33,7 +33,7 @@ VARIANTS = {
 }
 
 
-def profit_factor_fifo(trades: pd.DataFrame) -> float:
+def _profit_factor_fifo(trades: pd.DataFrame) -> float:
     """Realized profit factor after both entry and exit commissions, matched FIFO."""
     if trades.empty:
         return float("nan")
@@ -155,7 +155,7 @@ def main() -> int:
                     "max_drawdown_pct": -float(m["max_drawdown"] * 100),
                     "cagr_pct": float(m["cagr"] * 100),
                     "sharpe": float(m["sharpe"]), "sortino": float(m["sortino"]),
-                    "profit_factor": profit_factor_fifo(result.trades),
+                    "profit_factor": _profit_factor_fifo(result.trades),
                     "trades": len(result.trades), "fees_usd": float(result.total_transaction_costs),
                     "coverage": "PARTIAL: " + ",".join(missing) if missing else "OK",
                     "available_assets": len(available), "missing_assets": ",".join(missing),
