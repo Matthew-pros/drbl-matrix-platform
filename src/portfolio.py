@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from .models import PortfolioState, Position
+
 
 def mark_to_market(state: PortfolioState, prices: dict[str, float]) -> PortfolioState:
     for ticker, pos in list(state.positions.items()):
@@ -9,12 +11,17 @@ def mark_to_market(state: PortfolioState, prices: dict[str, float]) -> Portfolio
             state.positions.pop(ticker, None)
     return state
 
+
 def target_delta(state: PortfolioState, ticker: str, target_usd: float) -> float:
     current = state.positions.get(ticker)
     return target_usd - (current.market_value_usd if current else 0.0)
 
-def apply_confirmed_fill(state: PortfolioState, ticker: str, target_usd: float, quantity: float, price: float, side: str, commission: float = 0.0) -> None:
-    """Upraví stav pouze po potvrzeném fillu; request/preview stav portfolio nemění."""
+
+def apply_confirmed_fill(
+    state: PortfolioState, ticker: str, target_usd: float, quantity: float,
+    price: float, side: str, commission: float = 0.0, alm_tier: str | None = None,
+) -> None:
+    """Update shadow state only after an explicitly recorded simulated fill."""
     notional = quantity * price
     if side.upper() == "BUY":
         if notional + commission > state.cash_usd + 1e-6:
@@ -24,6 +31,7 @@ def apply_confirmed_fill(state: PortfolioState, ticker: str, target_usd: float, 
         state.cash_usd += notional - commission
     else:
         raise ValueError("Neznámá strana obchodu.")
+
     existing = state.positions.get(ticker)
     new_value = max(0.0, target_usd)
     if new_value <= 0.005:
@@ -31,6 +39,12 @@ def apply_confirmed_fill(state: PortfolioState, ticker: str, target_usd: float, 
     else:
         total_qty = (existing.quantity if existing else 0.0) + (quantity if side.upper() == "BUY" else -quantity)
         state.positions[ticker] = Position(ticker, new_value, max(0.0, total_qty), price)
-    if state.model.value == "Combined" and not state.alm_completed and side.upper() == "BUY" and target_usd > 0:
-        state.alm_completed = True
-        state.alm_fill_confirmed = True
+
+    if alm_tier and side.upper() == "BUY" and target_usd > 0:
+        state.alm_levels_filled.add(alm_tier)
+        if state.model.value == "Combined":
+            state.alm_completed = True
+            state.alm_fill_confirmed = True
+            state.active_alm_ticker = ticker
+    elif side.upper() == "SELL" and target_usd <= 0.005 and state.active_alm_ticker == ticker:
+        state.active_alm_ticker = None
