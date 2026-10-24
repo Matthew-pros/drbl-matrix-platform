@@ -111,6 +111,7 @@ def main() -> int:
 
     for horizon in HORIZONS:
         start = (end - pd.DateOffset(years=horizon)).normalize()
+        benchmark_added = False
         for variant, universe in VARIANTS.items():
             missing = [ticker for ticker in universe if ticker not in data]
             available = [ticker for ticker in universe if ticker in data]
@@ -155,6 +156,22 @@ def main() -> int:
                     "coverage": "PARTIAL: " + ",".join(missing) if missing else "OK",
                     "available_assets": len(available), "missing_assets": ",".join(missing),
                 })
+                if not benchmark_added:
+                    bm = result.benchmark_metrics
+                    rows.append({
+                        "portfolio": "SPY Buy & Hold", "horizon_years": horizon,
+                        "start": result.benchmark_equity.index.min().date().isoformat(),
+                        "end": result.benchmark_equity.index.max().date().isoformat(),
+                        "net_profit_usd": float(bm["ending_equity"] - args.initial_equity),
+                        "net_profit_pct": float(bm["total_return"] * 100),
+                        "max_drawdown_pct": -float(bm["max_drawdown"] * 100),
+                        "cagr_pct": float(bm["cagr"] * 100),
+                        "sharpe": float(bm["sharpe"]), "sortino": float(bm["sortino"]),
+                        "profit_factor": float("nan"), "trades": 1,
+                        "fees_usd": float(args.initial_equity * cost_rate / (1.0 + cost_rate)),
+                        "coverage": "SPY benchmark", "available_assets": 1, "missing_assets": "",
+                    })
+                    benchmark_added = True
                 result.equity.rename("TEMACD").to_csv(output / f"equity_{variant.lower().replace(' ', '_')}_{horizon}y.csv")
                 result.benchmark_equity.rename("SPY_BuyHold").to_csv(output / f"spy_{horizon}y.csv")
                 result.trades.to_csv(output / f"trades_{variant.lower().replace(' ', '_')}_{horizon}y.csv", index=False)
