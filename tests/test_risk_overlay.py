@@ -108,3 +108,22 @@ def test_combined_does_not_immediately_sell_recorded_crisis_alm_holding(sample_o
     assert rec.action == "HOLD"
     assert rec.ticker == "SPY"
     assert "krizová ALM tranše" in rec.reason
+
+
+def test_combined_does_not_trigger_crisis_alm_on_slow_drawdown_without_crash_bar(sample_ohlcv):
+    index = sample_ohlcv.index
+    close = pd.Series(np.linspace(100, 150, len(index)), index=index)
+    close.iloc[-10:] = np.linspace(126.0, 120.0, 10)
+    spy = _ohlcv(close)
+    spy.iloc[-1, spy.columns.get_loc("Open")] = 120.5
+    spy.iloc[-1, spy.columns.get_loc("High")] = 121.0
+    spy.iloc[-1, spy.columns.get_loc("Low")] = 119.5
+    data = {
+        "SPY": spy,
+        "QQQ": spy.copy(),
+        "VIX": _ohlcv(pd.Series(42.0, index=index)),
+    }
+    state = PortfolioState(ModelName.COMBINED, 100_000, selected_asset="SPY")
+    rec = generate_combined_recommendation(data, state, StrategyConfig())
+    assert rec.action == "HOLD_CASH"
+    assert rec.indicators.get("alm_tier") is None
