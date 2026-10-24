@@ -86,10 +86,9 @@ Burzovní kalendář pro USA používá `pandas_market_calendars`. Pokud tato kn
 - Profit factor je počítán z párovaných realizovaných fillů trade logu; přechody a neuzavřené pozice mohou tuto metriku omezit. Všechny výsledky jsou modelové.
 - Daňové dopady, brokerové kvalifikace kontraktů, evropské PRIIPs/UCITS přístupnosti a daňová optimalizace nejsou právní ani daňové doporučení.
 
-## Vytvoření nového GitHub repozitáře
+## GitHub repozitář
 
-Tento adresář je samostatný projekt a není navázán na starý `es_trading_dashboard`. Dostupné akce propojeného GitHub konektoru umí vytvářet soubory/commity v existujícím repozitáři, ale neumí vytvořit nový repozitář. Proto se nový remote zde **nepředstírá**. Viz `GITHUB_SETUP.md` pro jednorázové vytvoření prázdného repozitáře a bezpečný push.
-
+Aktuální projekt je uložen v [Matthew-pros/drbl-matrix-platform](https://github.com/Matthew-pros/drbl-matrix-platform). Podrobnosti pro klonování a spuštění jsou v `GITHUB_SETUP.md`. Nejde o starý `es_trading_dashboard`.
 ## TEMACD Volatility-Sized sektorová a beta rotace
 
 Aplikace obsahuje samostatnou sekci **TEMACD Rotace** a spustitelný CLI backtest `scripts/run_temacd_backtest.py`. Modul je oddělený od ALM/DRBL/Combined a nepřebírá jejich pozice ani stav.
