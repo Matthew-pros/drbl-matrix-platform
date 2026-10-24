@@ -1,0 +1,423 @@
+"""TEMACD volatility-sized multi-asset rotation backtest.
+
+Signal timing is deliberately conservative: indicators are computed from Close(t),
+orders are simulated at Open(t+1), and per-side transaction costs are charged on
+executed notional. This is a historical research module, not an order-routing engine.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from math import sqrt
+from typing import Literal
+
+import numpy as np
+import pandas as pd
+
+from ..indicators import atr_wilder, normalize_ohlcv
+
+CORE_ASSETS: tuple[str, ...] = (
+    "SPY", "QQQ", "XLK", "XLY", "XLI", "XLV", "XLF", "XLE", "XLP", "XLU",
+)
+AGGRESSIVE_ASSETS: tuple[str, ...] = (
+    "TQQQ", "SOXL", "SMH", "BTC-USD", "ETH-USD", "SOL-USD",
+)
+TEMACD_UNIVERSE: tuple[str, ...] = CORE_ASSETS + AGGRESSIVE_ASSETS
+
+
+@dataclass(frozen=True)
+class TEMACDConfig:
+    """Parameters for the rotation strategy; prices are daily OHLCV bars."""
+
+    ema_fast: int = 10
+    ema_mid: int = 30
+    ema_slow: int = 120
+    macd_fast: int = 30
+    macd_slow: int = 80
+    macd_signal: int = 15
+    rsi_period: int = 14
+    atr_period: int = 20
+    top_n: int = 3
+    rebalance: Literal["weekly", "monthly"] = "monthly"
+    target_risk: float = 0.01
+    max_asset_weight: float = 0.35
+    transaction_cost_rate: float = 0.0005
+    initial_equity: float = 100_000.0
+
+    def __post_init__(self) -> None:
+        periods = (self.ema_fast, self.ema_mid, self.ema_slow, self.macd_fast, self.macd_slow,
+                   self.macd_signal, self.rsi_period, self.atr_period)
+        if any(period < 2 for period in periods):
+            raise ValueError("Všechna období indikátorů musí být alespoň 2.")
+        if self.macd_fast >= self.macd_slow:
+            raise ValueError("MACD Fast musí být menší než MACD Slow.")
+        if self.top_n < 1 or self.top_n > len(TEMACD_UNIVERSE):
+            raise ValueError(f"Top N musí být v rozsahu 1–{len(TEMACD_UNIVERSE)}.")
+        if self.rebalance not in {"weekly", "monthly"}:
+            raise ValueError("Rebalanční interval musí být weekly nebo monthly.")
+        if not 0 < self.target_risk <= 0.10:
+            raise ValueError("Cílový risk na pozici musí být v intervalu (0, 10 %].")
+        if not 0 < self.max_asset_weight <= 1:
+            raise ValueError("Maximální váha musí být v intervalu (0, 100 %].")
+        if not 0 <= self.transaction_cost_rate < 0.1:
+            raise ValueError("Transakční poplatek musí být v intervalu [0, 10 %).")
+        if self.initial_equity <= 0:
+            raise ValueError("Počáteční equity musí být kladná.")
+
+
+@dataclass
+class TEMACDBacktestResult:
+    equity: pd.Series
+    benchmark_equity: pd.Series
+    metrics: dict[str, float | int]
+    benchmark_metrics: dict[str, float | int]
+    trades: pd.DataFrame
+    rebalance_log: pd.DataFrame
+    weights: pd.DataFrame
+    indicators: dict[str, pd.DataFrame] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    total_transaction_costs: float = 0.0
+
+
+def _ema(series: pd.Series, period: int) -> pd.Series:
+    return series.ewm(span=period, adjust=False, min_periods=period).mean()
+
+
+def _tema(series: pd.Series, period: int) -> pd.Series:
+    """Triple Exponential Moving Average: 3*EMA1 - 3*EMA2 + EMA3."""
+    ema1 = series.ewm(span=period, adjust=False, min_periods=period).mean()
+    ema2 = ema1.ewm(span=period, adjust=False, min_periods=period).mean()
+    ema3 = ema2.ewm(span=period, adjust=False, min_periods=period).mean()
+    return 3.0 * ema1 - 3.0 * ema2 + ema3
+
+
+def _rsi(close: pd.Series, period: int) -> pd.Series:
+    delta = close.diff()
+    gains = delta.clip(lower=0)
+    losses = -delta.clip(upper=0)
+    avg_gain = gains.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    avg_loss = losses.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0.0, np.nan)
+    result = 100.0 - 100.0 / (1.0 + rs)
+    result = result.mask((avg_loss == 0) & (avg_gain > 0), 100.0)
+    result = result.mask((avg_gain == 0) & (avg_loss > 0), 0.0)
+    return result.rename("RSI")
+
+
+def build_temacd_indicators(data: pd.DataFrame, config: TEMACDConfig | None = None) -> pd.DataFrame:
+    """Compute trend filter, TEMA-MACD, RSI and ATR without using future bars."""
+    cfg = config or TEMACDConfig()
+    frame = normalize_ohlcv(data)
+    close = frame["Close"].astype(float)
+    out = frame.copy()
+    out["EMA1"] = _ema(close, cfg.ema_fast)
+    out["EMA2"] = _ema(close, cfg.ema_mid)
+    out["EMA3"] = _ema(close, cfg.ema_slow)
+    out["TEMA_MACD_Fast"] = _tema(close, cfg.macd_fast)
+    out["TEMA_MACD_Slow"] = _tema(close, cfg.macd_slow)
+    out["TEMACD"] = out["TEMA_MACD_Fast"] - out["TEMA_MACD_Slow"]
+    out["TEMACD_Signal"] = _ema(out["TEMACD"], cfg.macd_signal)
+    out["TEMACD_Hist"] = out["TEMACD"] - out["TEMACD_Signal"]
+    out["RSI"] = _rsi(close, cfg.rsi_period)
+    out["ATR"] = atr_wilder(frame, cfg.atr_period)
+    out["ATR_pct"] = out["ATR"] / close
+    # Bullish state is MACD above its signal; a bearish cross is the first Close
+    # at which histogram moves from positive to non-positive.
+    out["bullish"] = (out["TEMACD_Hist"] > 0).fillna(False)
+    out["bearish_cross"] = (
+        (out["TEMACD_Hist"] <= 0) & (out["TEMACD_Hist"].shift(1) > 0)
+    ).fillna(False)
+    # The specification calls EMA3 the long-term eligibility filter.
+    out["trend_ok"] = (close > out["EMA3"]).fillna(False)
+    rsi_component = (out["RSI"] / 100.0).clip(0.0, 1.0)
+    hist_pct = (out["TEMACD_Hist"] / close) * 100.0
+    hist_component = (1.0 + np.tanh(hist_pct)) / 2.0
+    out["momentum_score"] = 0.5 * rsi_component + 0.5 * hist_component
+    required = ["EMA3", "TEMACD", "TEMACD_Signal", "RSI", "ATR_pct", "momentum_score"]
+    out["indicator_ready"] = out[required].notna().all(axis=1)
+    return out
+
+
+def _metrics(equity: pd.Series) -> dict[str, float | int]:
+    clean = equity.astype(float).dropna()
+    if len(clean) < 2 or clean.iloc[0] <= 0:
+        return {"total_return": float("nan"), "cagr": float("nan"), "annualized_volatility": float("nan"),
+                "sharpe": float("nan"), "sortino": float("nan"), "max_drawdown": float("nan"), "ending_equity": float(clean.iloc[-1]) if len(clean) else float("nan")}
+    returns = clean.pct_change(fill_method=None).dropna()
+    total_return = float(clean.iloc[-1] / clean.iloc[0] - 1.0)
+    years = max((clean.index[-1] - clean.index[0]).days / 365.25, 1.0 / 252.0)
+    cagr = float((clean.iloc[-1] / clean.iloc[0]) ** (1.0 / years) - 1.0) if clean.iloc[-1] > 0 else float("nan")
+    volatility = float(returns.std(ddof=1) * sqrt(252)) if len(returns) > 1 else float("nan")
+    daily_std = returns.std(ddof=1)
+    sharpe = float(returns.mean() / daily_std * sqrt(252)) if len(returns) > 1 and daily_std > 0 else float("nan")
+    downside = np.minimum(returns.to_numpy(dtype=float), 0.0)
+    downside_dev = float(np.sqrt(np.mean(np.square(downside)))) if len(downside) else 0.0
+    sortino = float(returns.mean() / downside_dev * sqrt(252)) if downside_dev > 0 else float("nan")
+    dd = clean / clean.cummax() - 1.0
+    return {"total_return": total_return, "cagr": cagr, "annualized_volatility": volatility,
+            "sharpe": sharpe, "sortino": sortino, "max_drawdown": float(abs(dd.min())),
+            "ending_equity": float(clean.iloc[-1])}
+
+
+def _period_key(day: pd.Timestamp, rebalance: str) -> tuple[int, ...]:
+    if rebalance == "weekly":
+        iso = day.isocalendar()
+        return (int(iso.year), int(iso.week))
+    return (day.year, day.month)
+
+
+def _target_weights(
+    eligible: list[tuple[str, float, float]], config: TEMACDConfig,
+) -> dict[str, float]:
+    """Apply weight = target risk / ATR%, per-asset cap, then 100% gross cap."""
+    if not eligible:
+        return {}
+    raw: dict[str, float] = {}
+    for asset, _score, atr_pct in eligible:
+        if not np.isfinite(atr_pct) or atr_pct <= 0:
+            continue
+        raw[asset] = min(config.max_asset_weight, config.target_risk / atr_pct)
+    gross = sum(raw.values())
+    if gross > 1.0:
+        raw = {asset: weight / gross for asset, weight in raw.items()}
+    return raw
+
+
+def run_temacd_backtest(
+    data: dict[str, pd.DataFrame],
+    config: TEMACDConfig | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    universe: tuple[str, ...] = TEMACD_UNIVERSE,
+) -> TEMACDBacktestResult:
+    """Run the strategy on SPY sessions; Close(t) signals execute at Open(t+1).
+
+    ``data`` must map Yahoo/IBKR tickers to daily OHLCV frames. BTC/ETH/SOL rows
+    can be present every day; the common evaluation calendar is SPY's sessions.
+    """
+    cfg = config or TEMACDConfig()
+    normalized: dict[str, pd.DataFrame] = {}
+    indicators: dict[str, pd.DataFrame] = {}
+    warnings: list[str] = []
+    # Always prepare SPY as benchmark, even when the selected universe excludes it.
+    assets_to_prepare = tuple(dict.fromkeys((*universe, "SPY")))
+    for asset in assets_to_prepare:
+        frame = data.get(asset)
+        if frame is None or frame.empty:
+            warnings.append(f"{asset}: data nejsou dostupná; aktivum je z rotace vynecháno.")
+            continue
+        try:
+            normalized[asset] = normalize_ohlcv(frame)
+            indicators[asset] = build_temacd_indicators(normalized[asset], cfg)
+        except (ValueError, TypeError) as exc:
+            warnings.append(f"{asset}: data/indikátory nelze použít ({exc}).")
+    if "SPY" not in normalized:
+        raise ValueError("Pro backtest a benchmark je povinné OHLCV SPY.")
+    spy_dates = pd.DatetimeIndex(normalized["SPY"].index).sort_values()
+    start_ts = pd.Timestamp(start) if start else spy_dates[0]
+    end_ts = pd.Timestamp(end) if end else spy_dates[-1]
+    dates = spy_dates[(spy_dates >= start_ts) & (spy_dates <= end_ts)]
+    if len(dates) < 2:
+        raise ValueError("Vybrané období musí obsahovat alespoň dvě SPY obchodní seance.")
+
+    cash = float(cfg.initial_equity)
+    holdings: dict[str, float] = {}  # asset -> shares
+    last_marks: dict[str, float] = {}
+    pending: tuple[pd.Timestamp, float, dict[str, float], str] | None = None
+    equity_rows: list[tuple[pd.Timestamp, float]] = []
+    benchmark_rows: list[tuple[pd.Timestamp, float]] = []
+    trade_rows: list[dict] = []
+    rebalance_rows: list[dict] = []
+    weight_rows: list[dict] = []
+    benchmark_qty = 0.0
+    benchmark_cash = float(cfg.initial_equity)
+    benchmark_initialized = False
+    last_rebalance_key: tuple[int, ...] | None = None
+
+    def bar_on(asset: str, day: pd.Timestamp) -> pd.Series | None:
+        frame = normalized.get(asset)
+        if frame is None or day not in frame.index:
+            return None
+        return frame.loc[day]
+
+    def mark_equity(day: pd.Timestamp, use_open: bool = False) -> float:
+        nonlocal last_marks
+        total = cash
+        for asset, quantity in holdings.items():
+            bar = bar_on(asset, day)
+            field = "Open" if use_open else "Close"
+            if bar is not None and pd.notna(bar[field]) and float(bar[field]) > 0:
+                last_marks[asset] = float(bar[field])
+            total += quantity * last_marks.get(asset, 0.0)
+        return float(total)
+
+    for idx, day in enumerate(dates):
+        # Execute yesterday's Close signal at today's Open, in sell-first order.
+        if pending is not None and pending[0] < day:
+            signal_day, signal_equity, target_weights, reason = pending
+            open_prices: dict[str, float] = {}
+            trade_assets = set(holdings) | set(target_weights)
+            for asset in trade_assets:
+                bar = bar_on(asset, day)
+                if bar is not None and pd.notna(bar["Open"]) and float(bar["Open"]) > 0:
+                    open_prices[asset] = float(bar["Open"])
+            # Mark current holdings at open where a bar exists.
+            current_values = {asset: qty * open_prices.get(asset, last_marks.get(asset, 0.0))
+                              for asset, qty in holdings.items()}
+            target_values = {asset: signal_equity * weight for asset, weight in target_weights.items()}
+            asset_order = sorted(trade_assets, key=lambda a: 0 if target_values.get(a, 0.0) < current_values.get(a, 0.0) else 1)
+            # Sells first, then buys, so rotations do not spend proceeds before they exist.
+            for asset in asset_order:
+                open_price = open_prices.get(asset)
+                if open_price is None:
+                    if target_values.get(asset, 0.0) != current_values.get(asset, 0.0):
+                        warnings.append(f"{day.date()}: {asset} nemá Open pro simulovanou exekuci; příkaz {reason!r} se přeskočil.")
+                    continue
+                current_qty = holdings.get(asset, 0.0)
+                target_qty = target_values.get(asset, 0.0) / open_price
+                delta_qty = target_qty - current_qty
+                notional = abs(delta_qty) * open_price
+                if notional < 1.0:
+                    continue
+                side = "BUY" if delta_qty > 0 else "SELL"
+                if side == "BUY":
+                    affordable = cash / (open_price * (1.0 + cfg.transaction_cost_rate)) if open_price > 0 else 0.0
+                    delta_qty = min(delta_qty, affordable)
+                    notional = delta_qty * open_price
+                if delta_qty == 0:
+                    continue
+                fee = notional * cfg.transaction_cost_rate
+                if side == "BUY":
+                    cash -= notional + fee
+                    holdings[asset] = current_qty + delta_qty
+                else:
+                    sell_qty = min(current_qty, abs(delta_qty))
+                    notional = sell_qty * open_price
+                    fee = notional * cfg.transaction_cost_rate
+                    cash += notional - fee
+                    remaining = current_qty - sell_qty
+                    if remaining <= 1e-10:
+                        holdings.pop(asset, None)
+                    else:
+                        holdings[asset] = remaining
+                trade_rows.append({
+                    "signal_timestamp": signal_day, "execution_timestamp": day, "ticker": asset,
+                    "side": side, "quantity": abs(delta_qty), "price": open_price,
+                    "notional_usd": notional, "commission_usd": fee, "transaction_cost_rate": cfg.transaction_cost_rate,
+                    "reason": reason, "status": "SIMULATED_FILLED",
+                })
+                last_marks[asset] = open_price
+            pending = None
+
+        # Benchmark SPY buys at the first evaluation Open, then holds.
+        spy_bar = bar_on("SPY", day)
+        if spy_bar is not None:
+            spy_open = float(spy_bar["Open"])
+            if not benchmark_initialized:
+                benchmark_notional = benchmark_cash / (1.0 + cfg.transaction_cost_rate)
+                benchmark_qty = benchmark_notional / spy_open
+                benchmark_cash -= benchmark_notional + benchmark_notional * cfg.transaction_cost_rate
+                benchmark_initialized = True
+            benchmark_close = float(spy_bar["Close"])
+            benchmark_equity = benchmark_cash + benchmark_qty * benchmark_close
+            benchmark_rows.append((day, benchmark_equity))
+
+        # Mark equity using Close prices after Open fills.
+        close_equity = mark_equity(day, use_open=False)
+        equity_rows.append((day, close_equity))
+
+        # Avoid creating orders that cannot execute before the selected end date.
+        if idx >= len(dates) - 1:
+            break
+
+        # Daily exit layer: bearish cross or loss of long-term EMA3 filter.
+        exits = []
+        for asset in holdings:
+            frame_i = indicators.get(asset)
+            if frame_i is None or day not in frame_i.index:
+                continue
+            row = frame_i.loc[day]
+            if bool(row.get("bearish_cross", False)) or not bool(row.get("trend_ok", False)):
+                exits.append(asset)
+        if exits:
+            current_weights: dict[str, float] = {}
+            current_equity = max(close_equity, 1e-9)
+            for asset, quantity in holdings.items():
+                if asset not in exits:
+                    mark = last_marks.get(asset, 0.0)
+                    current_weights[asset] = max(0.0, quantity * mark / current_equity)
+            reason = "daily risk exit: bearish TEMACD cross / Close below EMA3 for " + ", ".join(sorted(exits))
+            pending = (day, close_equity, current_weights, reason)
+            for asset in exits:
+                rebalance_rows.append({"signal_timestamp": day, "event": "EXIT", "ticker": asset,
+                                       "close": float(indicators[asset].loc[day, "Close"]),
+                                       "ATR_pct": float(indicators[asset].loc[day, "ATR_pct"]),
+                                       "target_weight": 0.0, "momentum_score": float(indicators[asset].loc[day, "momentum_score"]),
+                                       "reason": reason})
+
+        # Scheduled weekly/monthly rotation. The decision only uses today's Close.
+        next_day = dates[idx + 1]
+        today_key = _period_key(day, cfg.rebalance)
+        next_key = _period_key(next_day, cfg.rebalance)
+        is_scheduled_rebalance = today_key != next_key
+        if is_scheduled_rebalance and today_key != last_rebalance_key:
+            eligible: list[tuple[str, float, float]] = []
+            for asset in universe:
+                frame_i = indicators.get(asset)
+                if frame_i is None or day not in frame_i.index:
+                    continue
+                row = frame_i.loc[day]
+                ready = bool(row.get("indicator_ready", False))
+                bullish = bool(row.get("bullish", False))
+                trend_ok = bool(row.get("trend_ok", False))
+                atr_pct = float(row["ATR_pct"]) if pd.notna(row.get("ATR_pct")) else float("nan")
+                score = float(row["momentum_score"]) if pd.notna(row.get("momentum_score")) else float("nan")
+                if ready and bullish and trend_ok and np.isfinite(atr_pct) and atr_pct > 0 and np.isfinite(score):
+                    eligible.append((asset, score, atr_pct))
+            eligible.sort(key=lambda item: item[1], reverse=True)
+            selected = eligible[:cfg.top_n]
+            target_weights = _target_weights(selected, cfg)
+            reason = f"{cfg.rebalance} rotation; Top {cfg.top_n}; EMA3 trend filter + bullish TEMACD; selected={','.join(target_weights) or 'CASH'}"
+            # Scheduled rotation supersedes the daily-exit target from the same Close.
+            pending = (day, close_equity, target_weights, reason)
+            last_rebalance_key = today_key
+            for asset in universe:
+                row_i = indicators.get(asset)
+                if row_i is None or day not in row_i.index:
+                    continue
+                row = row_i.loc[day]
+                if not bool(row.get("indicator_ready", False)):
+                    continue
+                score = float(row["momentum_score"])
+                atr_pct = float(row["ATR_pct"])
+                weight = target_weights.get(asset, 0.0)
+                event = "SELECTED" if asset in target_weights else ("ELIGIBLE_NOT_TOP_N" if any(x[0] == asset for x in eligible) else "NOT_ELIGIBLE")
+                rebalance_rows.append({
+                    "signal_timestamp": day, "event": event, "ticker": asset,
+                    "close": float(row["Close"]), "ATR_pct": atr_pct,
+                    "target_weight": weight, "momentum_score": score,
+                    "RSI": float(row["RSI"]), "TEMACD_Hist": float(row["TEMACD_Hist"]),
+                    "trend_ok": bool(row["trend_ok"]), "bullish": bool(row["bullish"]),
+                    "reason": reason,
+                })
+                weight_rows.append({"signal_timestamp": day, "ticker": asset, "ATR_pct": atr_pct,
+                                    "target_weight": weight, "momentum_score": score,
+                                    "selected": asset in target_weights})
+
+    equity = pd.Series(dict(equity_rows), dtype=float).sort_index().rename("TEMACD Strategy")
+    benchmark = pd.Series(dict(benchmark_rows), dtype=float).sort_index().rename("SPY Buy & Hold")
+    if equity.empty or benchmark.empty:
+        raise ValueError("Výsledná equity křivka je prázdná; zkontrolujte období a SPY data.")
+    trades = pd.DataFrame(trade_rows)
+    rebalance_log = pd.DataFrame(rebalance_rows)
+    weights = pd.DataFrame(weight_rows)
+    metrics = _metrics(equity)
+    benchmark_metrics = _metrics(benchmark)
+    metrics["transactions"] = int(len(trades))
+    metrics["total_transaction_costs"] = float(trades["commission_usd"].sum()) if not trades.empty else 0.0
+    if not trades.empty:
+        metrics["average_transaction_cost_rate"] = float(trades["transaction_cost_rate"].mean())
+    else:
+        metrics["average_transaction_cost_rate"] = cfg.transaction_cost_rate
+    benchmark_metrics["transactions"] = int(benchmark_initialized)
+    return TEMACDBacktestResult(equity, benchmark, metrics, benchmark_metrics, trades, rebalance_log,
+                                weights, indicators, warnings, float(metrics["total_transaction_costs"]))
