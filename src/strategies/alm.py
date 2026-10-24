@@ -1,19 +1,23 @@
 from __future__ import annotations
+
 import pandas as pd
+
 from ..config import StrategyConfig
 from ..indicators import rolling_drawdown
 from ..models import DataMode, ModelName, PortfolioState, Recommendation, Regime
+from .risk_overlay import crisis_drawdown_candidate
+
 
 def generate_alm_recommendation(
     prices: dict[str, pd.DataFrame], state: PortfolioState, config: StrategyConfig,
     source: str = "Yahoo Finance", data_mode: DataMode = DataMode.HISTORICAL,
+    allow_crisis_tier: bool = False,
 ) -> Recommendation:
-    """ALM pracuje pouze se SPY/QQQ. V samostatném ALM modelu je možné postupovat po tranších.
-    Combined po prvním potvrzeném fillu přepne na DRBL a další ALM tranše už nevydává.
+    """Stupňovaný ALM nákup pouze základních ETF SPY/QQQ.
+
+    Standalone ALM retains the configured 30/50/80% drawdown tiers.
+    Combined may request only a distinct starter during a confirmed shock event.
     """
-    if state.model == ModelName.COMBINED and state.alm_completed and state.alm_fill_confirmed:
-        return Recommendation(state.model, None, source, data_mode, False, None, "HOLD", 0, 0, 0, 0,
-            "Combined již přešel do provozní DRBL fáze.")
     if len(state.positions) > 1:
         return Recommendation(state.model, None, source, DataMode.STALE, False, None, "REVIEW", 0, 0, 0, 0,
             "ALM očekává nejvýše jednu základní pozici SPY nebo QQQ.", available=False)
@@ -21,7 +25,7 @@ def generate_alm_recommendation(
     held_asset = held.ticker if held else None
     if held_asset and held_asset not in {"SPY", "QQQ"}:
         return Recommendation(state.model, None, source, DataMode.STALE, False, None, "REVIEW", 0, 0, 0, 0,
-            "ALM může držet pouze základní ETF SPY/QQQ.", available=False)
+            "ALM může držet pouze základní ETF SPY/QQQ; nejprve uzavři pozici mimo krizový univerzum.", available=False)
     candidates: list[tuple[str, float, float]] = []
     indicators: dict[str, float | None] = {}
     for ticker in ("SPY", "QQQ"):
@@ -39,16 +43,24 @@ def generate_alm_recommendation(
         indicators[f"{ticker}_drawdown"] = dd
         indicators[f"{ticker}_close"] = float(close.iloc[-1])
         candidates.append((ticker, dd, float(close.iloc[-1])))
-    eligible = []
-    for ticker, dd, _ in candidates:
-        for tier_key, threshold, allocation in reversed(config.alm_tiers):
-            if dd >= threshold and tier_key not in state.alm_levels_filled:
-                eligible.append((ticker, dd, tier_key, allocation))
-                break
+
+    eligible: list[tuple[str, float, str, float]] = []
+    crisis_only = allow_crisis_tier and state.model == ModelName.COMBINED
+    if not crisis_only:
+        for ticker, dd, _ in candidates:
+            for tier_key, threshold, allocation in reversed(config.alm_tiers):
+                if dd >= threshold and tier_key not in state.alm_levels_filled:
+                    eligible.append((ticker, dd, tier_key, allocation))
+                    break
+    if crisis_only:
+        allowed = {held_asset} if held_asset else None
+        crisis_candidate = crisis_drawdown_candidate(prices, config, state.alm_levels_filled, allowed)
+        if crisis_candidate is not None:
+            ticker, dd = crisis_candidate
+            eligible.append((ticker, dd, "crash_event", config.crisis_alm_allocation))
     if not eligible:
         return Recommendation(state.model, None, source, data_mode, False, None, "HOLD", 0, 0, 0, 0,
-            "SPY/QQQ nedosáhly další neprovedené ALM tranše, nebo byly všechny tranše vyčerpány.", indicators=indicators)
-    # Pokud portfolio ještě nic nedrží, vyber aktivum s hlubším drawdownem. Pak pokračuj jen na drženém aktivu.
+            "SPY/QQQ nedosáhly další neprovedené ALM tranše, nebo není potvrzen krizový starter.", indicators=indicators)
     ticker, dd, tier_key, allocation = max(eligible, key=lambda item: item[1])
     current = held.market_value_usd if held else 0.0
     max_total_position = state.equity_usd * (1-config.alm_cash_reserve)
@@ -61,6 +73,15 @@ def generate_alm_recommendation(
     indicators["alm_tier"] = tier_key
     indicators["alm_allocation_pct"] = allocation
     indicators["selected_drawdown"] = dd
+    if tier_key == "crash_event":
+        reason = (
+            f"Krizový ALM starter {ticker}: {allocation:.0%} equity při drawdownu {dd:.1%}; "
+            f"spouštěč risk-off a crash potvrzen. Zůstává minimálně {config.alm_cash_reserve:.0%} equity v hotovosti."
+        )
+    else:
+        reason = (
+            f"ALM tranše {tier_key} ({allocation:.0%} equity při DD {dd:.1%}); "
+            f"zachovat minimálně {config.alm_cash_reserve:.0%} equity v hotovosti."
+        )
     return Recommendation(state.model, None, source, data_mode, False, ticker, "BUY", target, delta, 0, 0,
-        f"ALM tranše {tier_key} ({allocation:.0%} equity při DD {dd:.1%}); zachovat minimálně {config.alm_cash_reserve:.0%} equity v hotovosti.",
-        Regime.UNKNOWN, indicators)
+        reason, Regime.UNKNOWN, indicators)
