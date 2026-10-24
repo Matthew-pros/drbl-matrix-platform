@@ -39,6 +39,8 @@ class PortfolioState:
     current_regime: Regime = Regime.UNKNOWN
     last_rotation_month: str | None = None
     alm_levels_filled: set[str] = field(default_factory=set)
+    # Distinguishes a live crisis ALM sleeve from an ordinary Matrix position.
+    active_alm_ticker: str | None = None
 
     @property
     def equity_usd(self) -> float:
