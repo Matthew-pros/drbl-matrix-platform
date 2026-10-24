@@ -173,7 +173,22 @@ def main() -> int:
     display_columns = ["portfolio", "horizon_years", "net_profit_usd", "net_profit_pct",
                        "max_drawdown_pct", "cagr_pct", "sharpe", "sortino", "profit_factor",
                        "trades", "fees_usd", "coverage"]
-    markdown = results[display_columns].to_markdown(index=False, floatfmt=".3f")
+    display = results[display_columns].copy()
+
+    def cell(value: object) -> str:
+        if pd.isna(value):
+            return "N/A"
+        if isinstance(value, (int, float)):
+            return f"{value:,.3f}"
+        return str(value).replace("|", "\\|").replace("\\n", " ")
+
+    header = "| " + " | ".join(display.columns) + " |"
+    separator = "| " + " | ".join("---" for _ in display.columns) + " |"
+    body = [
+        "| " + " | ".join(cell(value) for value in row) + " |"
+        for row in display.itertuples(index=False, name=None)
+    ]
+    markdown = "\\n".join([header, separator, *body])
     (output / "period_metrics.md").write_text(
         "# TEMACD — historické quant metriky\n\n"
         f"Stav k {end.date().isoformat()}, počáteční equity USD {args.initial_equity:,.2f}; "
