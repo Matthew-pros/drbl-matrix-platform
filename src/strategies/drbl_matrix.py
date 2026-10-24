@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import pandas as pd
+
 from ..calendar import month_rotation_date
 from ..config import StrategyConfig
 from ..models import DataMode, ModelName, PortfolioState, Recommendation, Regime
@@ -7,8 +9,10 @@ from ..indicators import (
     adx_wilder, atr_percent, atr_percentile_cap, momentum_score, rvol,
     selected_factor,
 )
+from .risk_overlay import assess_market_regime
 
 ASSETS = ("SPY", "QQQ", "GLD", "IBIT", "BTCUSD")
+
 
 def monthly_rotation_score(prices: dict[str, pd.DataFrame]) -> dict[str, float]:
     """12–1 momentum dělené 60denní anualizovanou sample volatilitou; nevalidní skóre se vynechá."""
@@ -22,6 +26,7 @@ def monthly_rotation_score(prices: dict[str, pd.DataFrame]) -> dict[str, float]:
             scores[asset] = float(score)
     return scores
 
+
 def choose_rotation(scores: dict[str, float], incumbent: str | None, hysteresis: float = 0.08) -> str | None:
     valid = {key: value for key, value in scores.items() if pd.notna(value)}
     if not valid:
@@ -32,6 +37,7 @@ def choose_rotation(scores: dict[str, float], incumbent: str | None, hysteresis:
     threshold = valid[incumbent] + abs(valid[incumbent]) * hysteresis
     return challenger if challenger != incumbent and valid[challenger] > threshold else incumbent
 
+
 def _finite(value) -> float | None:
     try:
         number = float(value)
@@ -39,23 +45,29 @@ def _finite(value) -> float | None:
     except (TypeError, ValueError):
         return None
 
+
 def _ticker_asset(ticker: str, config: StrategyConfig) -> str | None:
     for asset in ASSETS:
         candidates = {config.base_tickers.get(asset)}
         candidates.add(config.leveraged_tickers.get(asset))
-        if asset == "GLD": candidates.add(config.gld_leveraged_ticker)
-        if asset == "BTCUSD": candidates.add(config.btc_leveraged_ticker)
+        if asset == "GLD":
+            candidates.add(config.gld_leveraged_ticker)
+        if asset == "BTCUSD":
+            candidates.add(config.btc_leveraged_ticker)
         if ticker in candidates:
             return asset
     return None
+
 
 def _held_asset(state: PortfolioState, config: StrategyConfig) -> str | None:
     if len(state.positions) != 1:
         return None
     return _ticker_asset(next(iter(state.positions.values())).ticker, config)
 
+
 def _factor_for(asset: str, config: StrategyConfig) -> str:
     return config.factor_by_asset.get(asset, "TURTLE_SOUP")
+
 
 def _latest(frame: pd.DataFrame | None, asset: str, config: StrategyConfig) -> dict:
     if frame is None or frame.empty:
@@ -87,8 +99,10 @@ def _latest(frame: pd.DataFrame | None, asset: str, config: StrategyConfig) -> d
     })
     return details
 
+
 def _recommendation(state, source, data_mode, ticker, action, target, delta, reason, regime, indicators, available=True):
     return Recommendation(state.model, None, source, data_mode, False, ticker, action, float(target), float(delta), 0.0, 0.0, reason, regime, indicators, available)
+
 
 def generate_matrix_recommendation(
     prices: dict[str, pd.DataFrame], state: PortfolioState, config: StrategyConfig,
@@ -98,17 +112,40 @@ def generate_matrix_recommendation(
     """Denní DRBL rozhodnutí pro aktuálního rotačního lídra; rotaci sama nespouští."""
     gl = gld_leveraged_ticker if gld_leveraged_ticker is not None else config.gld_leveraged_ticker
     btc_lev = btc_leveraged_ticker if btc_leveraged_ticker is not None else config.btc_leveraged_ticker
-    # Attach runtime user mappings to a shallow local view of config maps; never invent a levered symbol.
     base_tickers = dict(config.base_tickers)
     levered_tickers = dict(config.leveraged_tickers)
-    if gl: levered_tickers["GLD"] = gl
-    if btc_lev: levered_tickers["BTCUSD"] = btc_lev
+    if gl:
+        levered_tickers["GLD"] = gl
+    if btc_lev:
+        levered_tickers["BTCUSD"] = btc_lev
     indicators = {asset: _latest(prices.get(asset), asset, config) for asset in ASSETS}
+    market_assessment = assess_market_regime(prices, config)
+    indicators["market_regime"] = {
+        "regime": market_assessment.regime,
+        "risk_off": market_assessment.risk_off,
+        "reason": market_assessment.reason,
+        **market_assessment.metrics,
+    }
     if len(state.positions) > 1:
         return _recommendation(state, source, DataMode.STALE, None, "REVIEW", 0, 0,
             "Portfolio obsahuje více než jednu spravovanou pozici; před novým obchodem je nutná ruční kontrola.", Regime.UNKNOWN, indicators, False)
 
     held = next(iter(state.positions.values()), None)
+    if config.risk_overlay_enabled and market_assessment.risk_off:
+        state.current_regime = Regime.C
+        if held is not None:
+            return _recommendation(
+                state, source, data_mode, held.ticker, "SELL_ALL", 0, -held.market_value_usd,
+                "Risk-off ochranná vrstva má prioritu nad běžným vstupním signálem; cílová expozice je nula. "
+                + market_assessment.reason,
+                Regime.C, indicators,
+            )
+        return _recommendation(
+            state, source, data_mode, None, "HOLD_CASH", 0, 0,
+            "Risk-off ochranná vrstva blokuje nové vstupy; portfolio zůstává v hotovosti. "
+            + market_assessment.reason,
+            Regime.C, indicators,
+        )
     held_asset = _ticker_asset(held.ticker, config) if held else None
     selected = state.selected_asset or held_asset
     if selected is None:
@@ -118,8 +155,6 @@ def generate_matrix_recommendation(
     if not info.get("available"):
         return _recommendation(state, source, DataMode.STALE, None, "UNAVAILABLE", 0, 0,
             f"Chybí validní historie pro {selected} / faktor {_factor_for(selected, config)}.", Regime.UNKNOWN, indicators, False)
-
-    # If rotation has selected a different base asset, close old exposure first. A new entry may occur next session.
     if held and held_asset != selected:
         return _recommendation(state, source, data_mode, held.ticker, "ROTATE_POSITION", 0, -held.market_value_usd,
             f"Měsíční rotace {held_asset} → {selected}; nejprve uzavřít původní pozici. Pokud nový faktor nemá entry, zůstaneme v hotovosti.", Regime.C, indicators)
@@ -136,7 +171,6 @@ def generate_matrix_recommendation(
                 "Režim C: cílová pozice všech spravovaných tickerů je nula; držet hotovost. " + reason, Regime.C, indicators)
         return _recommendation(state, source, data_mode, None, "HOLD_CASH", 0, 0,
             "Režim C: bez otevřené pozice, zůstat v hotovosti. " + reason, Regime.C, indicators)
-
     if not info["entry"]:
         if held:
             return _recommendation(state, source, data_mode, held.ticker, "HOLD", held.market_value_usd, 0,
@@ -144,7 +178,6 @@ def generate_matrix_recommendation(
         return _recommendation(state, source, data_mode, None, "HOLD_CASH", 0, 0,
             "Entry není aktivní; kapitál zůstává v hotovosti. " + reason, Regime.UNKNOWN, indicators)
 
-    # Režim A je zakázán pro IBIT; BTCUSD má 3x režim pouze pokud uživatel výslovně nakonfiguroval broker-validní symbol.
     if selected == "IBIT":
         target_ticker = base_tickers[selected]
         regime = Regime.B
@@ -165,8 +198,6 @@ def generate_matrix_recommendation(
     else:
         target_ticker = base_tickers[selected]
         regime = Regime.B
-
-    # BTC/IBIT and other 1x/no-leverage cases obey the same 85% target in regime B.
     target_usd = state.equity_usd * config.matrix_target_fraction
     current_usd = held.market_value_usd if held and held.ticker == target_ticker else 0.0
     if held and held.ticker != target_ticker:
@@ -177,6 +208,7 @@ def generate_matrix_recommendation(
     return _recommendation(state, source, data_mode, target_ticker, action, target_usd, delta,
         f"Režim {regime.value}; cílová pozice {config.matrix_target_fraction:.0%} equity; zbytek zůstává hotovost. " + reason,
         regime, indicators)
+
 
 def process_monthly_rotation(
     prices: dict[str, pd.DataFrame], state: PortfolioState, config: StrategyConfig, rotation_date: str,
