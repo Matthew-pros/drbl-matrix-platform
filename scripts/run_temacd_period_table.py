@@ -14,6 +14,7 @@ from pathlib import Path
 import sys
 
 import pandas as pd
+import plotly.graph_objects as go
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -66,6 +67,7 @@ def profit_factor_fifo(trades: pd.DataFrame) -> float:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="TEMACD quant metriky za 1, 3, 5, 10, 20 a 30 let")
     parser.add_argument("--end", default=date.today().isoformat(), help="Konec období (YYYY-MM-DD, včetně)")
+    parser.add_argument("--warmup-years", type=int, default=3, help="Warm-up období před nejstarším horizontem")
     parser.add_argument("--initial-equity", type=float, default=100_000)
     parser.add_argument("--top-n", type=int, default=3)
     parser.add_argument("--rebalance", choices=("weekly", "monthly"), default="monthly")
@@ -83,9 +85,11 @@ def main() -> int:
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     end = pd.Timestamp(args.end).normalize()
+    if args.warmup_years < 1:
+        raise SystemExit("--warmup-years musí být alespoň 1")
     earliest = end - pd.DateOffset(years=max(HORIZONS))
     # Warm-up is before the earliest evaluation start so EMA/ATR indicators are initialized.
-    fetch_start = (earliest - pd.DateOffset(years=3)).strftime("%Y-%m-%d")
+    fetch_start = (earliest - pd.DateOffset(years=args.warmup_years)).strftime("%Y-%m-%d")
     fetch_end = (end + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     provider = YahooFinanceProvider()
     tickers = list(dict.fromkeys((*TEMACD_UNIVERSE, "SPY")))
@@ -172,10 +176,17 @@ def main() -> int:
                         "coverage": "SPY benchmark", "available_assets": 1, "missing_assets": "",
                     })
                     benchmark_added = True
-                result.equity.rename("TEMACD").to_csv(output / f"equity_{variant.lower().replace(' ', '_')}_{horizon}y.csv")
+                variant_slug = variant.lower().replace(" ", "_")
+                result.equity.rename("TEMACD").to_csv(output / f"equity_{variant_slug}_{horizon}y.csv")
                 result.benchmark_equity.rename("SPY_BuyHold").to_csv(output / f"spy_{horizon}y.csv")
-                result.trades.to_csv(output / f"trades_{variant.lower().replace(' ', '_')}_{horizon}y.csv", index=False)
-                result.rebalance_log.to_csv(output / f"rebalance_{variant.lower().replace(' ', '_')}_{horizon}y.csv", index=False)
+                result.trades.to_csv(output / f"trades_{variant_slug}_{horizon}y.csv", index=False)
+                result.rebalance_log.to_csv(output / f"rebalance_{variant_slug}_{horizon}y.csv", index=False)
+                result.weights.to_csv(output / f"weights_{variant_slug}_{horizon}y.csv", index=False)
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=result.equity.index, y=result.equity.values, mode="lines", name=variant))
+                fig.add_trace(go.Scatter(x=result.benchmark_equity.index, y=result.benchmark_equity.values, mode="lines", name="SPY Buy & Hold"))
+                fig.update_layout(title=f"{variant} vs SPY — {horizon}Y", xaxis_title="Datum", yaxis_title="Equity (USD)", template="plotly_white")
+                fig.write_html(output / f"equity_vs_spy_{variant_slug}_{horizon}y.html", include_plotlyjs="cdn")
             except Exception as exc:
                 rows.append({"portfolio": variant, "horizon_years": horizon, "start": start.date().isoformat(),
                              "end": end.date().isoformat(), "net_profit_usd": None, "net_profit_pct": None,
