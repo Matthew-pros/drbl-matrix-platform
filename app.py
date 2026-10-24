@@ -37,6 +37,21 @@ with st.sidebar:
     start_date = st.date_input("Začátek vyhodnocení", value=date.today() - timedelta(days=365 * 5), max_value=date.today())
     end_date = st.date_input("Konec vyhodnocení", value=date.today(), min_value=start_date, max_value=date.today())
     source_kind = st.selectbox("Datový zdroj", ["Yahoo Finance · historical", "IBKR Gateway · read-only historical"])
+    st.caption("Yahoo Finance = historická data; IBKR Gateway = historická/read-only data. Nejde o garantovaný live feed.")
+    st.divider()
+    risk_overlay_enabled = st.checkbox(
+        "Zapnout risk-off ochranu", value=True,
+        help="Risk-off má přednost před běžným signálem Matrix a blokuje nové vstupy.",
+    )
+    with st.expander("Risk-off a krizový ALM"):
+        risk_off_vix_threshold = st.number_input("Silný risk-off: VIX ≥", min_value=15.0, max_value=80.0, value=35.0, step=1.0)
+        risk_elevated_vix_threshold = st.number_input("Zvýšený VIX", min_value=10.0, max_value=60.0, value=25.0, step=1.0)
+        risk_vix_spike_threshold = st.slider("Růst VIX za 5 seancí (%)", 10, 100, 35, 5) / 100.0
+        risk_crash_daily_return = st.slider("Denní pokles pro crash tripwire (%)", -10, -1, -4, 1) / 100.0
+        risk_crash_range_multiple = st.number_input("Rozsah svíčky / průměrný rozsah", 1.5, 6.0, 3.0, 0.5)
+        crisis_alm_enabled = st.checkbox("Povolit krizový starter pouze pro SPY/QQQ", value=True)
+        crisis_alm_drawdown = st.slider("Minimální drawdown pro krizový starter (%)", 10, 40, 15, 5) / 100.0
+        crisis_alm_allocation = st.slider("Velikost krizového starteru (% equity)", 5, 20, 10, 5) / 100.0
     st.divider()
     st.header("Faktory podle aktiva")
     factors = {asset: st.selectbox(f"{asset} faktor", AVAILABLE_FACTORS, index=AVAILABLE_FACTORS.index(DEFAULT_FACTORS[asset]), key=f"factor_{asset}") for asset in ASSETS}
@@ -60,6 +75,15 @@ config = StrategyConfig(
     factor_by_asset=factors,
     gld_leveraged_ticker=gld_lev,
     btc_leveraged_ticker=btc_lev,
+    risk_overlay_enabled=risk_overlay_enabled,
+    risk_off_vix_threshold=risk_off_vix_threshold,
+    risk_elevated_vix_threshold=risk_elevated_vix_threshold,
+    risk_vix_spike_threshold=risk_vix_spike_threshold,
+    risk_crash_daily_return=risk_crash_daily_return,
+    risk_crash_range_multiple=risk_crash_range_multiple,
+    crisis_alm_enabled=crisis_alm_enabled,
+    crisis_alm_drawdown=crisis_alm_drawdown,
+    crisis_alm_allocation=crisis_alm_allocation,
 )
 costs = CostConfig(
     profile=commission_profile,
