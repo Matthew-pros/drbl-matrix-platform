@@ -74,3 +74,15 @@ Burzovní kalendář pro USA používá `pandas_market_calendars`. Pokud tato kn
 ## Vytvoření nového GitHub repozitáře
 
 Tento adresář je samostatný projekt a není navázán na starý `es_trading_dashboard`. Dostupné akce propojeného GitHub konektoru umí vytvářet soubory/commity v existujícím repozitáři, ale neumí vytvořit nový repozitář. Proto se nový remote zde **nepředstírá**. Viz `GITHUB_SETUP.md` pro jednorázové vytvoření prázdného repozitáře a bezpečný push.
+
+
+## TEMACD Volatility-Sized Rotace (nové)
+
+Samostatná stránka **TEMACD Rotace** je dostupná v pages/06_TEMACD_Rotation.py. Strategie nabízí Sector Rotation, Aggressive Rotation a Combined Rotation; používá TEMACD, RSI, EMA3 filtr, ATR20 sizing, Top N, týdenní/měsíční rebalancování, náklady na každou stranu a benchmark SPY Buy & Hold. Signál se počítá na close dne t a simulovaná exekuce následuje na open dne t+1.
+
+- Podrobné zadání pro dalšího kódovacího agenta: [TEMACD_ROTATION_AGENT_PROMPT.md](TEMACD_ROTATION_AGENT_PROMPT.md)
+- Metodika a stav historických metrik: [PERFORMANCE_METRICS.md](PERFORMANCE_METRICS.md)
+- Výpočet metrik za horizonty 1/3/5/10/20/30 let: python scripts/run_temacd_period_table.py --end 2026-10-24
+- Jednorázový backtest a equity graf: python scripts/run_temacd_backtest.py --help
+
+Metriky se nesmějí považovat za ověřené, dokud skript nespustíš nad historickými daty. Čísla CAGR/Sharpe/MaxDD/Profit Factor uvedená ve specifikaci uživatele jsou pouze modelové hypotézy. Yahoo Finance poskytuje historická data, nikoli garantovaný live feed; IBKR Gateway provider je v tomto projektu určen pro historická/read-only data a aplikace neodesílá živé objednávky.
