@@ -56,6 +56,17 @@ class StrategyConfig:
     alm_tiers: tuple[tuple[str, float, float], ...] = (("dd_30", 0.30, 0.15), ("dd_50", 0.50, 0.20), ("dd_80", 0.80, 0.50))
     matrix_target_fraction: float = 0.85
     rotation_hysteresis: float = 0.08
+    # Denní režimový filtr používá výslovné pravidla, ne tvrzenou implementaci RAAM/FAA.
+    risk_overlay_enabled: bool = True
+    risk_off_vix_threshold: float = 35.0
+    risk_elevated_vix_threshold: float = 25.0
+    risk_vix_spike_minimum: float = 28.0
+    risk_vix_spike_threshold: float = 0.35
+    risk_crash_daily_return: float = -0.04
+    risk_crash_range_multiple: float = 3.0
+    crisis_alm_enabled: bool = True
+    crisis_alm_drawdown: float = 0.15
+    crisis_alm_allocation: float = 0.10
     adx_period: int = 14
     adx_leverage_threshold: float = 25.0
     rvol_short: int = 20
@@ -90,6 +101,18 @@ class StrategyConfig:
             raise ValueError("Cílová alokace musí být v intervalu (0, 1].")
         if not 0 <= self.rotation_hysteresis < 1:
             raise ValueError("Hystereze rotace musí být v intervalu [0, 1).")
+        if self.risk_off_vix_threshold <= 0 or self.risk_elevated_vix_threshold <= 0:
+            raise ValueError("Hranice VIX musí být kladné.")
+        if self.risk_vix_spike_minimum <= 0 or self.risk_vix_spike_threshold < 0:
+            raise ValueError("Parametry růstu VIX nejsou validní.")
+        if not -1 < self.risk_crash_daily_return < 0:
+            raise ValueError("Denní crash threshold musí být v intervalu (-1, 0).")
+        if self.risk_crash_range_multiple <= 0:
+            raise ValueError("Násobek denního rozpětí musí být kladný.")
+        if not 0 < self.crisis_alm_drawdown < 1:
+            raise ValueError("Krizový drawdown musí být v intervalu (0, 1).")
+        if not 0 < self.crisis_alm_allocation <= 1 - self.alm_cash_reserve:
+            raise ValueError("Krizová ALM tranše musí být kladná a respektovat hotovostní rezervu.")
         if self.atr_percentile_window < self.atr_period:
             raise ValueError("ATR percentile window musí být alespoň ATR perioda.")
         unknown = set(self.factor_by_asset.values()) - set(AVAILABLE_FACTORS)
