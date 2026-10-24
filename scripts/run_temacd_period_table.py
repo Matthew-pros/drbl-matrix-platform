@@ -205,7 +205,7 @@ def main() -> int:
         "| " + " | ".join(cell(value) for value in row) + " |"
         for row in display.itertuples(index=False, name=None)
     ]
-    markdown = "\\n".join([header, separator, *body])
+    markdown = "\n".join([header, separator, *body])
     (output / "period_metrics.md").write_text(
         "# TEMACD — historické quant metriky\n\n"
         f"Stav k {end.date().isoformat()}, počáteční equity USD {args.initial_equity:,.2f}; "
