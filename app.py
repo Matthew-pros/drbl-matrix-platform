@@ -99,7 +99,7 @@ def load_data(end: str, source: str, ticker_pairs: tuple[tuple[str, str], ...]) 
     return data, data_source, "\n".join(failures)
 
 pairs: dict[str, str] = dict(BASE_TICKERS)
-pairs.update({"UPRO": "UPRO", "TQQQ": "TQQQ"})
+pairs.update({"UPRO": "UPRO", "TQQQ": "TQQQ", "VIX": "^VIX"})
 if gld_lev:
     pairs["GLD_3X"] = gld_lev
 if btc_lev:
