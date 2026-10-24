@@ -119,6 +119,13 @@ def main() -> int:
         for variant, universe in VARIANTS.items():
             missing = [ticker for ticker in universe if ticker not in data]
             available = [ticker for ticker in universe if ticker in data]
+            late_history: list[str] = []
+            for ticker in available:
+                first_bar = coverage_by_ticker.get(ticker, {}).get("first_bar")
+                if first_bar:
+                    first_day = pd.Timestamp(str(first_bar)).normalize()
+                    if first_day > start + pd.Timedelta(days=35):
+                        late_history.append(f"{ticker}:{first_day.date().isoformat()}")
             spy_row = coverage_by_ticker.get("SPY", {})
             spy_start = pd.Timestamp(str(spy_row.get("first_bar"))) if spy_row.get("first_bar") else None
             if "SPY" not in data or spy_start is None or spy_start > start + pd.Timedelta(days=35):
@@ -127,7 +134,8 @@ def main() -> int:
                              "max_drawdown_pct": None, "cagr_pct": None, "sharpe": None, "sortino": None,
                              "profit_factor": None, "trades": None, "fees_usd": None,
                              "coverage": "N/A: SPY history does not cover full requested period",
-                             "available_assets": len(available), "missing_assets": ",".join(missing)})
+                             "available_assets": len(available), "missing_assets": ",".join(missing),
+                             "late_history_assets": ",".join(late_history)})
                 continue
             if not available:
                 rows.append({"portfolio": variant, "horizon_years": horizon, "start": start.date().isoformat(),
@@ -157,8 +165,12 @@ def main() -> int:
                     "sharpe": float(m["sharpe"]), "sortino": float(m["sortino"]),
                     "profit_factor": _profit_factor_fifo(result.trades),
                     "trades": len(result.trades), "fees_usd": float(result.total_transaction_costs),
-                    "coverage": "PARTIAL: " + ",".join(missing) if missing else "OK",
+                    "coverage": (
+                        ("PARTIAL; missing=" + ",".join(missing) if missing else "OK")
+                        + ("; late_history=" + ",".join(late_history) if late_history else "")
+                    ),
                     "available_assets": len(available), "missing_assets": ",".join(missing),
+                    "late_history_assets": ",".join(late_history),
                 })
                 if not benchmark_added:
                     bm = result.benchmark_metrics
