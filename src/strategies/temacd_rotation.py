@@ -756,6 +756,10 @@ def run_temacd_backtest(
                 row = frame_i.loc[day]
                 if bool(row.get("bearish_cross", False)) or not bool(row.get("trend_ok", False)):
                     exits.append(asset)
+                elif risk_off_active and asset in {"TQQQ", "SOXL"}:
+                    # Even with broad risk-off liquidation disabled, leveraged ETFs
+                    # are reduced at the next available Open.
+                    exits.append(asset)
                 elif market_regime == "TRANSITION" and cfg.disable_leverage_in_transition and asset in {"TQQQ", "SOXL"}:
                     exits.append(asset)
 
