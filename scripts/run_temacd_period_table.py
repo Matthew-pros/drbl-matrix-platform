@@ -43,6 +43,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rebalance", choices=("weekly", "monthly"), default="monthly")
     parser.add_argument("--target-risk-pct", type=float, default=1.0)
     parser.add_argument("--max-weight-pct", type=float, default=35.0)
+    parser.add_argument("--combined-aggressive-group-cap-pct", type=float, default=50.0)
+    parser.add_argument("--combined-crypto-group-cap-pct", type=float, default=25.0)
+    parser.add_argument("--combined-leveraged-group-cap-pct", type=float, default=35.0)
     parser.add_argument("--transaction-cost-bps", type=float, default=5.0, help="Náklad za každou stranu obchodu")
     parser.add_argument("--params-file", default=None, help="Optional per-asset JSON from the grid-search runner")
     parser.add_argument("--output-dir", default="outputs/temacd_periods")
@@ -214,7 +217,9 @@ def main() -> int:
     (output / "period_metrics.md").write_text(
         "# TEMACD — historické quant metriky\n\n"
         f"Stav k {end.date().isoformat()}, počáteční equity USD {args.initial_equity:,.2f}; "
-        f"náklady {args.transaction_cost_bps:g} bps za každou stranu; params-file={args.params_file or 'global defaults'}.\n\n"
+        f"náklady {args.transaction_cost_bps:g} bps za každou stranu; params-file={args.params_file or 'global defaults'}; "
+        f"Combined caps aggressive/crypto/leveraged={args.combined_aggressive_group_cap_pct:g}/"
+        f"{args.combined_crypto_group_cap_pct:g}/{args.combined_leveraged_group_cap_pct:g} %.\n\n"
         "CAGR/Sharpe/Sortino/MaxDD jsou vypočítány z denní equity; Profit Factor je FIFO "
         "realizovaný P&L po započtení vstupních i výstupních nákladů. N/A není nula; "
         "zkontrolujte coverage. Výsledky jsou historická simulace, ne příslib budoucí výkonnosti.\n\n"
