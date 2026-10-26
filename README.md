@@ -24,9 +24,11 @@ Jako výchozí soubor pro deployment zvol **`app.py`** v kořeni repozitáře. O
 
 Na Streamlit Cloud nech v levém panelu zdroj **Yahoo Finance · bezplatná historická data**. `yfinance` už je v závislostech. Jde o neplacený zdroj historických dat, nikoli garantovaný real-time feed; dostupnost i rozsah historie mohou být omezené.
 
+**Aplikace při úvodním otevření nestahuje data automaticky.** Tím je oddělen rychlý start UI od síťových požadavků, které mohou být pomalé nebo limitované. Po otevření aplikace nastav model a zdroj v sidebaru a klikni na **„Načíst / obnovit data“**. Yahoo požadavky mají pevný timeout a omezený počet pokusů; při chybě se zobrazí důvod a další pokus je výslovný.
+
 ## Vlastní VPS + IBKR Gateway
 
-Na VPS spusť IB Gateway/TWS a povol socket API na privátním rozhraní. Zkopíruj `.env.example` jako `.env`, nastav `DATA_SOURCE=ibkr`, `IBKR_HOST`, `IBKR_PORT` (paper obvykle `4002`, live se liší podle instalace) a `IBKR_CLIENT_ID`. Aplikaci pak spusť z kořenového adresáře jako `streamlit run app.py`. Zdroj lze v sidebaru přepnout i ručně. Nedávej Gateway/API port přímo do internetu; zabezpeč přístup firewallem a používej VPN/SSH tunel.
+Na VPS navíc nainstaluj závislost IBKR pomocí `pip install -e '.[ibkr]'` nebo `pip install -r requirements-vps.txt`. Na Streamlit Cloud se `ib_async`, pytest, Ruff a mypy neinstalují; jsou vyjmuté z běžných runtime dependencies. Na VPS spusť IB Gateway/TWS a povol socket API na privátním rozhraní. Zkopíruj `.env.example` jako `.env`, nastav `DATA_SOURCE=ibkr`, `IBKR_HOST`, `IBKR_PORT` (paper obvykle `4002`, live se liší podle instalace) a `IBKR_CLIENT_ID`. Aplikaci pak spusť z kořenového adresáře jako `streamlit run app.py`. Zdroj lze v sidebaru přepnout i ručně. Nedávej Gateway/API port přímo do internetu; zabezpeč přístup firewallem a používej VPN/SSH tunel.
 
 IBKR provider si vyžádá až 20 let denních dat, pokud jsou dostupná, ale dostupná historie závisí na instrumentu a oprávněních. Před použitím ALM ověř, jak daleko historie konkrétního instrumentu sahá: jeho drawdown se měří jen od prvního vráceného baru. Dokumentace IBKR uvádí, že požadavek historických barů se řídí délkou `durationStr` a dostupností dat. [IBKR: Historical Bars](https://www.interactivebrokers.com/docs/tws-api/doc/md/historical-bars).
 
@@ -41,6 +43,8 @@ python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -e '.[dev]'
+# IBKR Gateway provider na VPS (volitelně):
+pip install -e '.[ibkr]'
 streamlit run app.py
 ```
 
