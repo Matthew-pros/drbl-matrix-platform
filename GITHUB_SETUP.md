@@ -33,3 +33,11 @@ Skript vytvoří CSV/Markdown tabulku, coverage historii, equity CSV a HTML graf
 - Streamlit Cloud má jen runtime dependencies; vývojové balíky a IBKR knihovna se instalují odděleně, pokud jsou potřeba.
 
 Nepřidávej `.env`, přihlašovací údaje, broker tokeny ani osobní databázi do Gitu.
+
+## Per-asset grid search
+
+    python scripts/run_temacd_grid_search.py --end 2026-10-26 --train-years 5 --oos-years 2
+    python scripts/run_temacd_backtest.py --start 2021-10-26 --end 2026-10-26 --params-file outputs/temacd_grid/asset_params.json
+    python scripts/run_temacd_period_table.py --end 2026-10-26 --params-file outputs/temacd_grid/asset_params.json
+
+Grid search vybere parametry z in-sample období. OOS metriky se vykážou odděleně a nevstupují do výběru. V Streamlit stránce lze asset_params.json nahrát do přepínače per-asset parametrů.
