@@ -132,6 +132,9 @@ def main() -> int:
             cfg = TEMACDConfig(
                 top_n=min(args.top_n, len(TEMACD_UNIVERSE)), rebalance=args.rebalance,
                 target_risk=args.target_risk_pct / 100, max_asset_weight=args.max_weight_pct / 100,
+                combined_aggressive_group_cap=args.combined_aggressive_group_cap_pct / 100,
+                combined_crypto_group_cap=args.combined_crypto_group_cap_pct / 100,
+                combined_leveraged_group_cap=args.combined_leveraged_group_cap_pct / 100,
                 transaction_cost_rate=cost_rate, initial_equity=args.initial_equity,
                 asset_params=asset_params,
             )
