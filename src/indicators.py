@@ -164,7 +164,9 @@ def vwap200_factors(data: pd.DataFrame, period: int = 200) -> pd.DataFrame:
 
 def selected_factor(data: pd.DataFrame, factor: str, config) -> pd.DataFrame:
     factor = factor.upper()
-    if factor == "TURTLE_SOUP":
+    if factor == "BREAKOUT_40_20":
+        result = breakout_factors(data, config.ts_entry_lookback, config.ts_exit_lookback)
+    elif factor == "TURTLE_SOUP":
         result = turtle_soup_factors(data, config.ts_entry_lookback, config.ts_exit_lookback, config.ts_confirmation_days)
     elif factor == "KELTNER":
         result = keltner_factors(data, config.keltner_ema_period, config.keltner_atr_period, config.keltner_atr_multiple)

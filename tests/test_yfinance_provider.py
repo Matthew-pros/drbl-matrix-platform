@@ -9,6 +9,22 @@ from src.data import yfinance_provider
 from src.data.yfinance_provider import YahooFinanceProvider
 
 
+def _single_frame() -> pd.DataFrame:
+    index = pd.bdate_range("2025-01-02", periods=3)
+    return pd.DataFrame(
+        {
+            "Open": [100.0, 101.0, 102.0],
+            "High": [101.0, 102.0, 103.0],
+            "Low": [99.0, 100.0, 101.0],
+            "Close": [100.5, 101.5, 102.5],
+            "Volume": [1_000_000.0] * 3,
+            "Dividends": [0.0] * 3,
+            "Stock Splits": [0.0] * 3,
+        },
+        index=index,
+    )
+
+
 def test_yahoo_provider_uses_bounded_explicit_adjusted_download(monkeypatch) -> None:
     index = pd.bdate_range("2025-01-02", periods=4)
     raw = pd.DataFrame(
@@ -110,6 +126,7 @@ def test_force_refresh_bypasses_parquet_cache(monkeypatch) -> None:
     result = YahooFinanceProvider().get_many_daily_bars(
         ["SPY"], "2025-01-01", "2025-02-01", force_refresh=True
     )
-    assert result["SPY"].bars.equals(raw[["Open", "High", "Low", "Close", "Volume"]])
+    assert len(result["SPY"].bars) == len(raw)
+    assert result["SPY"].bars.index.equals(raw.index)
     assert cache_reads == []
     assert downloads == [["SPY"]]

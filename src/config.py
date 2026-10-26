@@ -24,13 +24,13 @@ LEVERAGED_TICKERS: dict[str, str | None] = {
     "BTCUSD": None,    # 3x BTC instrument není univerzální symbol; nikdy jej neodhaduj
 }
 DEFAULT_FACTORS: dict[str, str] = {
-    "SPY": "TURTLE_SOUP",
-    "QQQ": "TURTLE_SOUP",
+    "SPY": "BREAKOUT_40_20",
+    "QQQ": "BREAKOUT_40_20",
     "GLD": "LRS",
     "IBIT": "LRS",
     "BTCUSD": "LRS",
 }
-AVAILABLE_FACTORS = ("TURTLE_SOUP", "KELTNER", "LRS", "SMA200", "EMA200", "VWAP200")
+AVAILABLE_FACTORS = ("BREAKOUT_40_20", "TURTLE_SOUP", "KELTNER", "LRS", "SMA200", "EMA200", "VWAP200")
 
 @dataclass(frozen=True)
 class CostConfig:

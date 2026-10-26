@@ -57,7 +57,8 @@ streamlit run app.py
 
 ## Výchozí pravidla faktorů
 
-- **Turtle Soup / Darvas (SPY/QQQ):** breakout 40denního High s 5denní pauzou bez nových maxim; exit při Close pod předchozím 20denním Low. Reference vylučuje aktuální bar.
+- **Výchozí SPY/QQQ – BREAKOUT_40_20:** entry při Close ≥ nejvyšší High předchozích 40 obchodních seancí a exit při Close ≤ nejnižší Low předchozích 20 seancí. Aktuální bar je z referenčního okna vyloučen.
+- **Volitelný Turtle Soup / Darvas:** používá stejná 40/20 okna plus pětiseanční pauzu bez nových maxim před entry. Není to výchozí faktor, protože původní specifikace požaduje čistý breakout 40/20.
 - **Keltner:** EMA(50) jako střed, horní pásmo = EMA50 + 2 × ATR(20); entry nad horním pásmem, exit pod EMA50.
 - **Linear Regression Slope:** 100denní OLS slope nad Close; entry při slope > 0 a Close > SMA100 + 2 × population std; exit při slope < 0.
 - **SMA200 / EMA200 / VWAP200:** samostatné srovnávací baseline faktory; vstup nad linií a exit pod ní.

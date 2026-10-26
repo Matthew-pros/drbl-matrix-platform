@@ -1,7 +1,11 @@
 import numpy as np
 import pandas as pd
 import pytest
-from src.indicators import adx_wilder, breakout_factors, momentum_12_1, annualized_volatility, regression_factors, rvol, normalize_ohlcv
+from src.config import DEFAULT_FACTORS, StrategyConfig
+from src.indicators import (
+    adx_wilder, breakout_factors, momentum_12_1, annualized_volatility,
+    regression_factors, rvol, normalize_ohlcv, selected_factor,
+)
 
 def test_momentum_12_1_uses_t_minus_22_and_252():
     s = pd.Series(np.arange(1., 300.))
@@ -43,3 +47,13 @@ def test_normalize_duplicates_invalid_price_and_columns():
     out=normalize_ohlcv(df)
     assert len(out)==1
     assert out["Close"].iloc[0]==12
+
+
+def test_default_spy_qqq_factor_is_exact_40_20_breakout(sample_ohlcv):
+    config = StrategyConfig()
+    assert DEFAULT_FACTORS["SPY"] == "BREAKOUT_40_20"
+    assert DEFAULT_FACTORS["QQQ"] == "BREAKOUT_40_20"
+    expected = breakout_factors(sample_ohlcv, 40, 20)
+    selected = selected_factor(sample_ohlcv, DEFAULT_FACTORS["SPY"], config)
+    pd.testing.assert_series_equal(selected["entry"], expected["entry"], check_names=False)
+    pd.testing.assert_series_equal(selected["exit"], expected["exit"], check_names=False)

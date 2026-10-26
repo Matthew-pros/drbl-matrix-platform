@@ -60,3 +60,14 @@ TEMACD je samostatný výzkumný modul a nenahrazuje ALM ani DRBL Matrix.
 - **Dokumentace:** TEMACD_ROTATION_AGENT_PROMPT.md a PERFORMANCE_METRICS.md.
 
 Neověřené modelové metriky (CAGR, Sharpe, MaxDD, Profit Factor) z uživatelského návrhu se nepoužívají jako backtestové výsledky. Ziskovost, drawdown a rizikové poměry musí být vypočteny na přesných historických datech s náklady a následně ověřeny out-of-sample.
+
+
+## 7. Výchozí SPY/QQQ faktor — přesné 40/20 pravidlo
+
+Výchozí faktor pro SPY a QQQ je `BREAKOUT_40_20`, jak vyžaduje původní zadání:
+
+- Entry: Close(t) ≥ maximum High z předchozích 40 obchodních barů, bez aktuálního baru.
+- Exit: Close(t) ≤ minimum Low z předchozích 20 obchodních barů, bez aktuálního baru.
+- Signál vyhodnocený na Close se v backtestu vykoná nejdříve na Open následující seance.
+
+`TURTLE_SOUP` zůstává samostatným volitelným faktorem s pětiseanční pauzou bez nových maxim. Nelze ho zaměňovat za výchozí pravidlo 40/20.
