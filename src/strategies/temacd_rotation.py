@@ -6,7 +6,7 @@ executed notional. This is a historical research module, not an order-routing en
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from math import sqrt
 from typing import Literal
 
@@ -22,6 +22,30 @@ AGGRESSIVE_ASSETS: tuple[str, ...] = (
     "TQQQ", "SOXL", "SMH", "BTC-USD", "ETH-USD", "SOL-USD",
 )
 TEMACD_UNIVERSE: tuple[str, ...] = CORE_ASSETS + AGGRESSIVE_ASSETS
+
+
+@dataclass(frozen=True)
+class TEMACDAssetParams:
+    """Per-asset indicator parameters selected by the walk-forward grid-search tool."""
+
+    ema_fast: int = 10
+    ema_mid: int = 30
+    ema_slow: int = 120
+    macd_fast: int = 30
+    macd_slow: int = 80
+    macd_signal: int = 15
+    rsi_period: int = 14
+    atr_period: int = 20
+
+    def __post_init__(self) -> None:
+        periods = (self.ema_fast, self.ema_mid, self.ema_slow, self.macd_fast,
+                   self.macd_slow, self.macd_signal, self.rsi_period, self.atr_period)
+        if any(period < 2 for period in periods):
+            raise ValueError("Per-asset indikátorové periody musí být alespoň 2.")
+        if not self.ema_fast < self.ema_mid < self.ema_slow:
+            raise ValueError("EMA periody musí být vzestupné: EMA fast < mid < slow.")
+        if self.macd_fast >= self.macd_slow:
+            raise ValueError("MACD Fast musí být menší než MACD Slow.")
 
 
 @dataclass(frozen=True)
@@ -42,14 +66,42 @@ class TEMACDConfig:
     max_asset_weight: float = 0.35
     transaction_cost_rate: float = 0.0005
     initial_equity: float = 100_000.0
+    # Optional per-asset parameters produced by the grid-search runner.
+    # Empty mapping deliberately uses the documented global defaults.
+    asset_params: dict[str, TEMACDAssetParams] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         periods = (self.ema_fast, self.ema_mid, self.ema_slow, self.macd_fast, self.macd_slow,
                    self.macd_signal, self.rsi_period, self.atr_period)
         if any(period < 2 for period in periods):
             raise ValueError("Všechna období indikátorů musí být alespoň 2.")
+        if not self.ema_fast < self.ema_mid < self.ema_slow:
+            raise ValueError("EMA periody musí být vzestupné: EMA fast < mid < slow.")
         if self.macd_fast >= self.macd_slow:
             raise ValueError("MACD Fast musí být menší než MACD Slow.")
+        unknown_assets = set(self.asset_params) - set(TEMACD_UNIVERSE)
+        if unknown_assets:
+            raise ValueError(f"Per-asset parametry obsahují neznámé tickery: {', '.join(sorted(unknown_assets))}.")
+        if any(not isinstance(value, TEMACDAssetParams) for value in self.asset_params.values()):
+            raise TypeError("asset_params musí mapovat tickery na TEMACDAssetParams.")
+
+    def for_asset(self, ticker: str) -> TEMACDConfig:
+        """Return a config with the selected ticker's parameters, if available."""
+        params = self.asset_params.get(ticker)
+        if params is None:
+            return self
+        return replace(
+            self,
+            ema_fast=params.ema_fast,
+            ema_mid=params.ema_mid,
+            ema_slow=params.ema_slow,
+            macd_fast=params.macd_fast,
+            macd_slow=params.macd_slow,
+            macd_signal=params.macd_signal,
+            rsi_period=params.rsi_period,
+            atr_period=params.atr_period,
+            asset_params={},
+        )
         if self.top_n < 1 or self.top_n > len(TEMACD_UNIVERSE):
             raise ValueError(f"Top N musí být v rozsahu 1–{len(TEMACD_UNIVERSE)}.")
         if self.rebalance not in {"weekly", "monthly"}:
@@ -103,9 +155,16 @@ def _rsi(close: pd.Series, period: int) -> pd.Series:
     return result.rename("RSI")
 
 
-def build_temacd_indicators(data: pd.DataFrame, config: TEMACDConfig | None = None) -> pd.DataFrame:
-    """Compute trend filter, TEMA-MACD, RSI and ATR without using future bars."""
-    cfg = config or TEMACDConfig()
+def build_temacd_indicators(
+    data: pd.DataFrame, config: TEMACDConfig | None = None, asset: str | None = None,
+) -> pd.DataFrame:
+    """Compute trend filter, TEMA-MACD, RSI and ATR without using future bars.
+
+    When an asset is supplied, use its grid-searched parameters if configured;
+    otherwise fall back to the explicit global defaults.
+    """
+    global_cfg = config or TEMACDConfig()
+    cfg = global_cfg.for_asset(asset) if asset else global_cfg
     frame = normalize_ohlcv(data)
     close = frame["Close"].astype(float)
     out = frame.copy()
@@ -257,7 +316,7 @@ def run_temacd_backtest(
             continue
         try:
             normalized[asset] = normalize_ohlcv(frame)
-            indicators[asset] = build_temacd_indicators(normalized[asset], cfg)
+            indicators[asset] = build_temacd_indicators(normalized[asset], cfg, asset=asset)
         except (ValueError, TypeError) as exc:
             warnings.append(f"{asset}: data/indikátory nelze použít ({exc}).")
     if "SPY" not in normalized:
