@@ -64,14 +64,20 @@ def main() -> int:
     market_data: dict[str, pd.DataFrame] = {}
     errors: list[str] = []
     print(f"Loading daily Yahoo Finance bars from {warmup_start} through {end_exclusive} (exclusive end)…")
+    try:
+        batch = provider.get_many_daily_bars(TEMACD_UNIVERSE, warmup_start, end_exclusive)
+    except Exception as exc:
+        batch = {}
+        errors.append(f"Bulk Yahoo Finance request failed: {exc}")
     for ticker in TEMACD_UNIVERSE:
-        try:
-            result = provider.get_daily_bars(ticker, warmup_start, end_exclusive)
-            market_data[ticker] = result.bars
-            print(f"  {ticker:8} {len(result.bars):5} bars, last={result.last_timestamp}")
-        except Exception as exc:  # one asset failing should not hide other symbol histories
-            errors.append(f"{ticker}: {exc}")
-            print(f"  {ticker:8} SKIPPED: {exc}")
+        item = (batch or {}).get(ticker)
+        if item is None or item.bars.empty:
+            message = item.warning if item is not None else "Ticker is missing from batch response."
+            errors.append(f"{ticker}: {message}")
+            print(f"  {ticker:8} SKIPPED: {message}")
+            continue
+        market_data[ticker] = item.bars
+        print(f"  {ticker:8} {len(item.bars):5} bars, last={item.last_timestamp}")
 
     config = TEMACDConfig(
         ema_fast=args.ema_fast, ema_mid=args.ema_mid, ema_slow=args.ema_slow,
