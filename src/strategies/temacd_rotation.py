@@ -816,15 +816,44 @@ def run_temacd_backtest(
                 cross_or_held = bullish_cross_recent or asset in held_assets
                 atr_pct = float(row["ATR_pct"]) if pd.notna(row.get("ATR_pct")) else float("nan")
                 score = float(row["momentum_score"]) if pd.notna(row.get("momentum_score")) else float("nan")
-                if ready and bullish and trend_ok and cross_or_held and np.isfinite(atr_pct) and atr_pct > 0 and np.isfinite(score):
+                leverage_blocked = (
+                    market_regime == "TRANSITION"
+                    and cfg.disable_leverage_in_transition
+                    and asset in {"TQQQ", "SOXL"}
+                )
+                if (
+                    not risk_off_active
+                    and not leverage_blocked
+                    and ready and bullish and trend_ok and cross_or_held
+                    and np.isfinite(atr_pct) and atr_pct > 0 and np.isfinite(score)
+                ):
                     eligible.append((asset, score, atr_pct))
             eligible.sort(key=lambda item: item[1], reverse=True)
             selected = eligible[:cfg.top_n]
             combined_mode = bool(set(universe) & set(CORE_ASSETS)) and bool(set(universe) & set(AGGRESSIVE_ASSETS))
-            target_weights = _target_weights(selected, cfg, apply_combined_group_caps=combined_mode)
+            if risk_off_active:
+                if cfg.exit_on_risk_off:
+                    target_weights = {}
+                else:
+                    current_equity = max(close_equity, 1e-9)
+                    target_weights = {
+                        asset: max(0.0, quantity * last_marks.get(asset, 0.0) / current_equity)
+                        for asset, quantity in holdings.items()
+                        if asset not in exits and asset not in {"TQQQ", "SOXL"}
+                    }
+            else:
+                effective_config = (
+                    replace(cfg, target_risk=cfg.target_risk * risk_multiplier)
+                    if market_regime == "TRANSITION" else cfg
+                )
+                target_weights = _target_weights(
+                    selected, effective_config, apply_combined_group_caps=combined_mode
+                )
             reason = (
                 f"{cfg.rebalance} rotation; Top {cfg.top_n}; EMA3 trend filter + bullish TEMACD; "
                 f"fresh cross in last {cross_window} bars unless already held; "
+                f"regime={market_regime}; risk_multiplier={risk_multiplier:.2f}; "
+                f"exit_on_risk_off={cfg.exit_on_risk_off}; "
                 f"Combined group caps={'ON' if combined_mode else 'OFF'}; "
                 f"selected={','.join(target_weights) or 'CASH'}"
             )
@@ -841,22 +870,47 @@ def run_temacd_backtest(
                 score = float(row["momentum_score"])
                 atr_pct = float(row["ATR_pct"])
                 weight = target_weights.get(asset, 0.0)
-                event = "SELECTED" if asset in target_weights else ("ELIGIBLE_NOT_TOP_N" if any(x[0] == asset for x in eligible) else "NOT_ELIGIBLE")
                 bullish_cross_recent = recent_cross.get(asset, False)
+                if risk_off_active:
+                    event = "BLOCKED_RISK_OFF" if not cfg.exit_on_risk_off else "RISK_OFF_CASH"
+                elif market_regime == "TRANSITION" and cfg.disable_leverage_in_transition and asset in {"TQQQ", "SOXL"}:
+                    event = "BLOCKED_TRANSITION_LEVERAGE"
+                else:
+                    event = "SELECTED" if asset in target_weights else (
+                        "ELIGIBLE_NOT_TOP_N" if any(x[0] == asset for x in eligible) else "NOT_ELIGIBLE"
+                    )
+                sizing_config = (
+                    replace(cfg, target_risk=cfg.target_risk * risk_multiplier)
+                    if market_regime == "TRANSITION" and not risk_off_active else cfg
+                )
+                raw_weight = (
+                    sizing_config.target_risk / atr_pct
+                    if np.isfinite(atr_pct) and atr_pct > 0 and not risk_off_active else 0.0
+                )
+                capped_weight = min(raw_weight, sizing_config.max_asset_weight)
+                adjustment_factor = weight / capped_weight if capped_weight > 0 else 0.0
                 rebalance_rows.append({
                     "signal_timestamp": day, "event": event, "ticker": asset,
                     "close": float(row["Close"]), "ATR_pct": atr_pct,
-                    "target_weight": weight, "momentum_score": score,
+                    "raw_weight": raw_weight, "per_asset_capped_weight": capped_weight,
+                    "target_weight": weight, "weight_adjustment_factor": adjustment_factor,
+                    "momentum_score": score, "market_regime": market_regime,
+                    "risk_multiplier": risk_multiplier,
                     "RSI": float(row["RSI"]), "TEMACD_Hist": float(row["TEMACD_Hist"]),
                     "trend_ok": bool(row["trend_ok"]), "bullish": bool(row["bullish"]),
                     "bullish_cross": bool(row["bullish_cross"]), "bullish_cross_recent": bullish_cross_recent,
                     "reason": reason,
                 })
-                weight_rows.append({"signal_timestamp": day, "ticker": asset, "ATR_pct": atr_pct,
-                                    "target_weight": weight, "momentum_score": score,
-                                    "selected": asset in target_weights,
-                                    "bullish_cross_recent": bullish_cross_recent,
-                                    "combined_group_caps_applied": combined_mode})
+                weight_rows.append({
+                    "signal_timestamp": day, "ticker": asset, "ATR_pct": atr_pct,
+                    "raw_weight": raw_weight, "per_asset_capped_weight": capped_weight,
+                    "target_weight": weight, "weight_adjustment_factor": adjustment_factor,
+                    "momentum_score": score, "market_regime": market_regime,
+                    "risk_multiplier": risk_multiplier, "selected": asset in target_weights,
+                    "bullish_cross_recent": bullish_cross_recent,
+                    "combined_group_caps_applied": combined_mode,
+                    "risk_off_active": risk_off_active,
+                })
 
     equity = pd.Series(dict(equity_rows), dtype=float).sort_index().rename("TEMACD Strategy")
     benchmark = pd.Series(dict(benchmark_rows), dtype=float).sort_index().rename("SPY Buy & Hold")
