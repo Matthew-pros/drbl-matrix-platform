@@ -39,6 +39,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rebalance", choices=("weekly", "monthly"), default="monthly")
     parser.add_argument("--target-risk-pct", type=float, default=1.0, help="Target risk unit as percent of equity per position")
     parser.add_argument("--max-weight-pct", type=float, default=35.0, help="Max single-asset weight percent")
+    parser.add_argument("--combined-aggressive-group-cap-pct", type=float, default=50.0)
+    parser.add_argument("--combined-crypto-group-cap-pct", type=float, default=25.0)
+    parser.add_argument("--combined-leveraged-group-cap-pct", type=float, default=35.0)
     parser.add_argument("--transaction-cost-bps", type=float, default=5.0, help="Cost per buy/sell side in basis points; 5 bps = 0.05%%")
     parser.add_argument("--ema-fast", type=int, default=10)
     parser.add_argument("--ema-mid", type=int, default=30)
@@ -89,6 +92,9 @@ def main() -> int:
         atr_period=args.atr_period, rsi_period=args.rsi_period, top_n=args.top_n,
         rebalance=args.rebalance, target_risk=args.target_risk_pct / 100.0,
         max_asset_weight=args.max_weight_pct / 100.0,
+        combined_aggressive_group_cap=args.combined_aggressive_group_cap_pct / 100.0,
+        combined_crypto_group_cap=args.combined_crypto_group_cap_pct / 100.0,
+        combined_leveraged_group_cap=args.combined_leveraged_group_cap_pct / 100.0,
         transaction_cost_rate=args.transaction_cost_bps / 10_000.0,
         initial_equity=args.initial_equity,
         asset_params=asset_params,
@@ -102,6 +108,9 @@ def main() -> int:
             "start": args.start, "end": args.end, "warmup_start": warmup_start,
             "universe": list(TEMACD_UNIVERSE), "top_n": args.top_n, "rebalance": args.rebalance,
             "target_risk_pct": args.target_risk_pct, "max_weight_pct": args.max_weight_pct,
+            "combined_aggressive_group_cap_pct": args.combined_aggressive_group_cap_pct,
+            "combined_crypto_group_cap_pct": args.combined_crypto_group_cap_pct,
+            "combined_leveraged_group_cap_pct": args.combined_leveraged_group_cap_pct,
             "transaction_cost_bps_per_side": args.transaction_cost_bps,
             "initial_equity": args.initial_equity,
             "ema": [args.ema_fast, args.ema_mid, args.ema_slow],
