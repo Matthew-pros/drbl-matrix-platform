@@ -74,3 +74,12 @@ Nedostatek historie je pro dlouhé horizonty věcný problém. TQQQ a SOXL nebyl
 ## Upozornění k interpretaci
 
 ATR sizing nastavuje váhy podle ATR % a stropu váhy aktiva; automaticky nezaručuje vyšší Sharpe/Sortino nebo nižší MaxDD. Leveraged ETFs mají path dependency a mohou mít dlouhodobé ztráty; crypto obchoduje i o víkendech, kdežto benchmark SPY má burzovní kalendář. Výsledek závisí na synchronizaci barů, chybějících datech, adjustaci corporate actions, nákladech, slippage a proveditelné ceně exekuce.
+
+## Per-asset parametry
+
+Portfolio metriky lze přepočítat s per-asset parametry z walk-forward grid-search:
+
+    python scripts/run_temacd_grid_search.py --end 2026-10-26 --train-years 5 --oos-years 2
+    python scripts/run_temacd_period_table.py --end 2026-10-26 --params-file outputs/temacd_grid/asset_params.json
+
+Grid search vybírá parametry pouze podle in-sample score (omezená kombinace Sharpe a Calmar, s minimální hranicí počtu fillů). Výstupní OOS tabulka je samostatná a nepoužívá se pro výběr. Pokud není dostatek obchodů nebo dostupných dat, kandidát je odmítnut a použije se označený globální fallback. Aktuální výsledky nejsou předem vyplněny ani předpokládané.
