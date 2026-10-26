@@ -33,3 +33,7 @@ jobs:
         run: python -m pytest -q tests/test_app_startup.py
       - name: Check metrics runner CLI
         run: python scripts/run_temacd_period_table.py --help
+      - name: Check grid-search runner CLI
+        run: python scripts/run_temacd_grid_search.py --help
+      - name: Check single backtest runner CLI
+        run: python scripts/run_temacd_backtest.py --help
