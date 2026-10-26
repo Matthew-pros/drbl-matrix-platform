@@ -11,6 +11,8 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate
 # Linux/macOS: source .venv/bin/activate
 pip install -e ".[dev]"
+# Jen na VPS, pokud použiješ IBKR Gateway:
+pip install -e ".[ibkr]"
 streamlit run app.py
 ```
 
@@ -26,7 +28,8 @@ Skript vytvoří CSV/Markdown tabulku, coverage historii, equity CSV a HTML graf
 
 ## Datové zdroje
 
-- Streamlit Cloud: Yahoo Finance přes `yfinance` (historická denní data, ne garantovaný live feed).
-- Vlastní VPS: IBKR Gateway pro historická/read-only data. V této verzi aplikace neposílá skutečné objednávky.
+- Streamlit Cloud: Yahoo Finance přes `yfinance` (historická denní data, ne garantovaný live feed). UI se načte bez požadavku na data; stahování začne až po kliknutí na „Načíst / obnovit data“.
+- Vlastní VPS: nainstaluj `pip install -r requirements-vps.txt` nebo `pip install -e ".[ibkr]"` pro IBKR Gateway historická/read-only data. V této verzi aplikace neposílá skutečné objednávky.
+- Streamlit Cloud má jen runtime dependencies; vývojové balíky a IBKR knihovna se instalují odděleně, pokud jsou potřeba.
 
 Nepřidávej `.env`, přihlašovací údaje, broker tokeny ani osobní databázi do Gitu.
