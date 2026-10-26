@@ -201,6 +201,19 @@ def run_temacd_grid_search(
             best_train_metrics = {"in_sample_score": float("nan"), "in_sample_transactions": 0,
                                   "status": "FALLBACK_TO_DEFAULT_NO_VALID_GRID_CANDIDATE"}
         best_by_asset[ticker] = best_params
+        selected_meta[ticker] = {
+            "fallback_to_default": fallback,
+            "in_sample_score": float(best_score) if np.isfinite(best_score) else None,
+            "in_sample_transactions": int(best_train_metrics.get("in_sample_transactions", 0)),
+            "in_sample_sharpe": (
+                float(best_train_metrics["in_sample_sharpe"])
+                if np.isfinite(best_train_metrics.get("in_sample_sharpe", float("nan"))) else None
+            ),
+            "in_sample_calmar": (
+                float(best_train_metrics["in_sample_calmar"])
+                if np.isfinite(best_train_metrics.get("in_sample_calmar", float("nan"))) else None
+            ),
+        }
 
         cfg_oos = TEMACDConfig(
             top_n=1, rebalance="monthly", target_risk=target_risk,
