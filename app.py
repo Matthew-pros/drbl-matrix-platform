@@ -149,8 +149,12 @@ if not st.session_state.get("market_data_loaded", False):
 with st.spinner("Načítám historická denní data; první stažení může trvat déle…"):
     market_data, source_map, load_errors = load_data(end_date.isoformat(), source_kind, tuple(pairs.items()))
 if not market_data:
+    # Allow retry only after another explicit click; avoid repeated slow network calls on every rerun.
+    st.session_state["market_data_loaded"] = False
     st.error("Není dostupná použitelná historie. Zkontroluj připojení, názvy tickerů a případná data subscription.")
-    if load_errors: st.code(load_errors)
+    if load_errors:
+        st.code(load_errors)
+    st.info("Zkontroluj výše uvedenou chybu a klikni na „Načíst / obnovit data“ pro nový pokus.")
     st.stop()
 if load_errors:
     with st.expander("Neúplná data / chyby poskytovatele"):
