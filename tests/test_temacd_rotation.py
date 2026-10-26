@@ -80,3 +80,38 @@ def test_temacd_config_validation():
         TEMACDConfig(macd_fast=80, macd_slow=30)
     with pytest.raises(ValueError, match="Maximální váha"):
         TEMACDConfig(max_asset_weight=0)
+
+def test_combined_rotation_caps_correlated_aggressive_crypto_and_leveraged_groups():
+    cfg = TEMACDConfig(
+        target_risk=0.01,
+        max_asset_weight=0.35,
+        combined_aggressive_group_cap=0.50,
+        combined_crypto_group_cap=0.25,
+        combined_leveraged_group_cap=0.35,
+    )
+    candidates = [
+        ("QQQ", 0.90, 0.01),
+        ("XLK", 0.85, 0.01),
+        ("TQQQ", 0.80, 0.01),
+        ("SOXL", 0.75, 0.01),
+        ("SMH", 0.70, 0.01),
+        ("BTC-USD", 0.65, 0.01),
+        ("ETH-USD", 0.60, 0.01),
+        ("SOL-USD", 0.55, 0.01),
+    ]
+    weights = _target_weights(candidates, cfg, apply_combined_group_caps=True)
+    aggressive_total = sum(weights.get(ticker, 0.0) for ticker in ("TQQQ", "SOXL", "SMH", "BTC-USD", "ETH-USD", "SOL-USD"))
+    crypto_total = sum(weights.get(ticker, 0.0) for ticker in ("BTC-USD", "ETH-USD", "SOL-USD"))
+    leveraged_total = sum(weights.get(ticker, 0.0) for ticker in ("TQQQ", "SOXL"))
+    assert aggressive_total <= 0.50 + 1e-12
+    assert crypto_total <= 0.25 + 1e-12
+    assert leveraged_total <= 0.35 + 1e-12
+    assert sum(weights.values()) <= 1.0 + 1e-12
+    assert all(weight <= 0.35 + 1e-12 for weight in weights.values())
+
+
+def test_standalone_aggressive_rotation_does_not_apply_combined_group_cap():
+    cfg = TEMACDConfig(target_risk=0.01, max_asset_weight=0.35)
+    candidates = [("TQQQ", 0.9, 0.01), ("SOXL", 0.8, 0.01), ("SMH", 0.7, 0.01)]
+    weights = _target_weights(candidates, cfg, apply_combined_group_caps=False)
+    assert sum(weights.values()) == pytest.approx(1.0)
