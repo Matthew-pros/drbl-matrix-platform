@@ -14,8 +14,9 @@ from ..models import DataMode
 class YahooFinanceProvider(DataProvider):
     """Historická denní OHLCV data přes yfinance; nejsou garantovaným živým feedem."""
 
-    def __init__(self, retries: int = 3) -> None:
+    def __init__(self, retries: int = 2, timeout_seconds: float = 12.0) -> None:
         self.retries = max(1, retries)
+        self.timeout_seconds = max(1.0, float(timeout_seconds))
 
     def get_daily_bars(self, ticker: str, start: str, end: str) -> MarketData:
         key = cache_key(ticker, start, end, "daily-auto-adjust-true-v3")
@@ -39,7 +40,7 @@ class YahooFinanceProvider(DataProvider):
                 raw = yf.download(
                     ticker, start=start, end=end, interval="1d",
                     auto_adjust=True, actions=True, progress=False,
-                    threads=False, group_by="column",
+                    threads=False, group_by="column", timeout=self.timeout_seconds,
                 )
                 if raw is None or raw.empty:
                     raise RuntimeError(f"Yahoo Finance vrátilo prázdnou historii pro {ticker}.")
