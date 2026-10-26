@@ -120,9 +120,12 @@ def build_temacd_indicators(data: pd.DataFrame, config: TEMACDConfig | None = No
     out["RSI"] = _rsi(close, cfg.rsi_period)
     out["ATR"] = atr_wilder(frame, cfg.atr_period)
     out["ATR_pct"] = out["ATR"] / close
-    # Bullish state is MACD above its signal; a bearish cross is the first Close
-    # at which histogram moves from positive to non-positive.
+    # A bullish state persists while MACD is above its signal. The event flag
+    # marks a new cross from non-positive to positive histogram.
     out["bullish"] = (out["TEMACD_Hist"] > 0).fillna(False)
+    out["bullish_cross"] = (
+        (out["TEMACD_Hist"] > 0) & (out["TEMACD_Hist"].shift(1) <= 0)
+    ).fillna(False)
     out["bearish_cross"] = (
         (out["TEMACD_Hist"] <= 0) & (out["TEMACD_Hist"].shift(1) > 0)
     ).fillna(False)
@@ -408,6 +411,13 @@ def run_temacd_backtest(
         is_scheduled_rebalance = today_key != next_key
         if is_scheduled_rebalance and today_key != last_rebalance_key:
             eligible: list[tuple[str, float, float]] = []
+            held_assets = set(holdings)
+            # A fresh bullish cross is an entry gate over the current rebalance
+            # window. Existing holdings may remain eligible while the bullish state
+            # and EMA3 trend filter persist; otherwise a positive MACD state that
+            # crossed months ago could be mistaken for a fresh entry signal.
+            cross_window = 5 if cfg.rebalance == "weekly" else 22
+            recent_cross: dict[str, bool] = {}
             for asset in universe:
                 frame_i = indicators.get(asset)
                 if frame_i is None or day not in frame_i.index:
@@ -416,14 +426,22 @@ def run_temacd_backtest(
                 ready = bool(row.get("indicator_ready", False))
                 bullish = bool(row.get("bullish", False))
                 trend_ok = bool(row.get("trend_ok", False))
+                crosses = frame_i.loc[:day, "bullish_cross"].tail(cross_window)
+                bullish_cross_recent = bool(crosses.any())
+                recent_cross[asset] = bullish_cross_recent
+                cross_or_held = bullish_cross_recent or asset in held_assets
                 atr_pct = float(row["ATR_pct"]) if pd.notna(row.get("ATR_pct")) else float("nan")
                 score = float(row["momentum_score"]) if pd.notna(row.get("momentum_score")) else float("nan")
-                if ready and bullish and trend_ok and np.isfinite(atr_pct) and atr_pct > 0 and np.isfinite(score):
+                if ready and bullish and trend_ok and cross_or_held and np.isfinite(atr_pct) and atr_pct > 0 and np.isfinite(score):
                     eligible.append((asset, score, atr_pct))
             eligible.sort(key=lambda item: item[1], reverse=True)
             selected = eligible[:cfg.top_n]
             target_weights = _target_weights(selected, cfg)
-            reason = f"{cfg.rebalance} rotation; Top {cfg.top_n}; EMA3 trend filter + bullish TEMACD; selected={','.join(target_weights) or 'CASH'}"
+            reason = (
+                f"{cfg.rebalance} rotation; Top {cfg.top_n}; EMA3 trend filter + bullish TEMACD; "
+                f"fresh cross in last {cross_window} bars unless already held; "
+                f"selected={','.join(target_weights) or 'CASH'}"
+            )
             # Scheduled rotation supersedes the daily-exit target from the same Close.
             pending = (day, close_equity, target_weights, reason)
             last_rebalance_key = today_key
@@ -438,17 +456,20 @@ def run_temacd_backtest(
                 atr_pct = float(row["ATR_pct"])
                 weight = target_weights.get(asset, 0.0)
                 event = "SELECTED" if asset in target_weights else ("ELIGIBLE_NOT_TOP_N" if any(x[0] == asset for x in eligible) else "NOT_ELIGIBLE")
+                bullish_cross_recent = recent_cross.get(asset, False)
                 rebalance_rows.append({
                     "signal_timestamp": day, "event": event, "ticker": asset,
                     "close": float(row["Close"]), "ATR_pct": atr_pct,
                     "target_weight": weight, "momentum_score": score,
                     "RSI": float(row["RSI"]), "TEMACD_Hist": float(row["TEMACD_Hist"]),
                     "trend_ok": bool(row["trend_ok"]), "bullish": bool(row["bullish"]),
+                    "bullish_cross": bool(row["bullish_cross"]), "bullish_cross_recent": bullish_cross_recent,
                     "reason": reason,
                 })
                 weight_rows.append({"signal_timestamp": day, "ticker": asset, "ATR_pct": atr_pct,
                                     "target_weight": weight, "momentum_score": score,
-                                    "selected": asset in target_weights})
+                                    "selected": asset in target_weights,
+                                    "bullish_cross_recent": bullish_cross_recent})
 
     equity = pd.Series(dict(equity_rows), dtype=float).sort_index().rename("TEMACD Strategy")
     benchmark = pd.Series(dict(benchmark_rows), dtype=float).sort_index().rename("SPY Buy & Hold")
