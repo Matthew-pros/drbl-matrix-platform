@@ -78,3 +78,4 @@ class OrderPreview:
     currency: str = "USD"
     exchange: str = "SMART"
     status: str = "PREVIEW_ONLY"
+    other_fees_usd: float = 0.0
