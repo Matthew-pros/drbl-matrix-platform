@@ -50,7 +50,7 @@ class TEMACDAssetParams:
 
 @dataclass(frozen=True)
 class TEMACDConfig:
-    """Parameters for the rotation strategy; prices are daily OHLCV bars."""
+    """Rotation and risk configuration; defaults are explicit and reproducible."""
 
     ema_fast: int = 10
     ema_mid: int = 30
@@ -66,22 +66,70 @@ class TEMACDConfig:
     max_asset_weight: float = 0.35
     transaction_cost_rate: float = 0.0005
     initial_equity: float = 100_000.0
-    # Optional per-asset parameters produced by the grid-search runner.
-    # Empty mapping deliberately uses the documented global defaults.
+    # Optional per-asset parameters from the walk-forward grid-search runner.
     asset_params: dict[str, TEMACDAssetParams] = field(default_factory=dict)
+    # Combined-only group caps. Standalone Core/Aggressive portfolios are not limited by these.
     combined_aggressive_group_cap: float = 0.50
     combined_crypto_group_cap: float = 0.25
-    combined_leveraged_group_cap: float = 0.35
+    combined_leveraged_group_cap: float = 0.20
+    # Transparent market-regime overlay; VIX is optional but its absence must be logged.
+    risk_overlay_enabled: bool = True
+    exit_on_risk_off: bool = True
+    risk_off_vix_threshold: float = 30.0
+    risk_elevated_vix_threshold: float = 25.0
+    risk_vix_spike_minimum: float = 28.0
+    risk_vix_spike_threshold: float = 0.35
+    risk_crash_daily_return: float = -0.04
+    risk_crash_range_multiple: float = 3.0
+    risk_crash_cooldown_sessions: int = 5
+    transition_risk_multiplier: float = 0.50
+    disable_leverage_in_transition: bool = True
+    risk_recovery_confirmation_days: int = 2
 
     def __post_init__(self) -> None:
-        periods = (self.ema_fast, self.ema_mid, self.ema_slow, self.macd_fast, self.macd_slow,
-                   self.macd_signal, self.rsi_period, self.atr_period)
+        periods = (
+            self.ema_fast, self.ema_mid, self.ema_slow, self.macd_fast,
+            self.macd_slow, self.macd_signal, self.rsi_period, self.atr_period,
+        )
         if any(period < 2 for period in periods):
             raise ValueError("Všechna období indikátorů musí být alespoň 2.")
         if not self.ema_fast < self.ema_mid < self.ema_slow:
             raise ValueError("EMA periody musí být vzestupné: EMA fast < mid < slow.")
         if self.macd_fast >= self.macd_slow:
             raise ValueError("MACD Fast musí být menší než MACD Slow.")
+        if self.top_n < 1 or self.top_n > len(TEMACD_UNIVERSE):
+            raise ValueError(f"Top N musí být v rozsahu 1–{len(TEMACD_UNIVERSE)}.")
+        if self.rebalance not in {"weekly", "monthly"}:
+            raise ValueError("Rebalanční interval musí být weekly nebo monthly.")
+        if not 0 < self.target_risk <= 0.10:
+            raise ValueError("Cílový risk na pozici musí být v intervalu (0, 10 %].")
+        if not 0 < self.max_asset_weight <= 1:
+            raise ValueError("Maximální váha musí být v intervalu (0, 100 %].")
+        for name, value in (
+            ("aggressive group cap", self.combined_aggressive_group_cap),
+            ("crypto group cap", self.combined_crypto_group_cap),
+            ("leveraged group cap", self.combined_leveraged_group_cap),
+        ):
+            if not 0 < value <= 1:
+                raise ValueError(f"Combined {name} musí být v intervalu (0, 100 %].")
+        if not 0 <= self.transaction_cost_rate < 0.1:
+            raise ValueError("Transakční poplatek musí být v intervalu [0, 10 %).")
+        if self.initial_equity <= 0:
+            raise ValueError("Počáteční equity musí být kladná.")
+        if min(self.risk_off_vix_threshold, self.risk_elevated_vix_threshold, self.risk_vix_spike_minimum) <= 0:
+            raise ValueError("Hranice VIX musí být kladné.")
+        if self.risk_vix_spike_threshold < 0:
+            raise ValueError("Prahová změna VIX nesmí být záporná.")
+        if not -1 < self.risk_crash_daily_return < 0:
+            raise ValueError("Crash denní výnos musí ležet v intervalu (-100 %, 0 %).")
+        if self.risk_crash_range_multiple <= 0:
+            raise ValueError("Násobek denního rozpětí musí být kladný.")
+        if self.risk_crash_cooldown_sessions < 1:
+            raise ValueError("Crash cooldown musí být alespoň jedna obchodní seance.")
+        if not 0 < self.transition_risk_multiplier <= 1:
+            raise ValueError("Transition risk multiplier musí být v intervalu (0, 1].")
+        if self.risk_recovery_confirmation_days < 1:
+            raise ValueError("Recovery confirmation musí být alespoň jedna seance.")
         unknown_assets = set(self.asset_params) - set(TEMACD_UNIVERSE)
         if unknown_assets:
             raise ValueError(f"Per-asset parametry obsahují neznámé tickery: {', '.join(sorted(unknown_assets))}.")
@@ -105,25 +153,6 @@ class TEMACDConfig:
             atr_period=params.atr_period,
             asset_params={},
         )
-        if self.top_n < 1 or self.top_n > len(TEMACD_UNIVERSE):
-            raise ValueError(f"Top N musí být v rozsahu 1–{len(TEMACD_UNIVERSE)}.")
-        if self.rebalance not in {"weekly", "monthly"}:
-            raise ValueError("Rebalanční interval musí být weekly nebo monthly.")
-        if not 0 < self.target_risk <= 0.10:
-            raise ValueError("Cílový risk na pozici musí být v intervalu (0, 10 %].")
-        if not 0 < self.max_asset_weight <= 1:
-            raise ValueError("Maximální váha musí být v intervalu (0, 100 %].")
-        if not 0 < self.combined_aggressive_group_cap <= 1:
-            raise ValueError("Combined aggressive group cap musí být v intervalu (0, 100 %].")
-        if not 0 < self.combined_crypto_group_cap <= 1:
-            raise ValueError("Combined crypto group cap musí být v intervalu (0, 100 %].")
-        if not 0 < self.combined_leveraged_group_cap <= 1:
-            raise ValueError("Combined leveraged group cap musí být v intervalu (0, 100 %].")
-        if not 0 <= self.transaction_cost_rate < 0.1:
-            raise ValueError("Transakční poplatek musí být v intervalu [0, 10 %).")
-        if self.initial_equity <= 0:
-            raise ValueError("Počáteční equity musí být kladná.")
-
 
 @dataclass
 class TEMACDBacktestResult:
