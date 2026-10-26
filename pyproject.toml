@@ -15,11 +15,11 @@ dependencies = [
   "plotly==6.3.1",
   "yfinance==0.2.66",
   "pandas-market-calendars==5.2.3",
-  "ib_async==2.0.1",
   "pyarrow==21.0.0",
 ]
 
 [project.optional-dependencies]
+ibkr = ["ib_async==2.0.1"]
 dev = ["pytest==8.4.2", "ruff==0.14.1", "mypy==1.18.2"]
 
 [tool.setuptools.packages.find]
