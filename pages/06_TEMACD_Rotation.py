@@ -51,6 +51,16 @@ with st.sidebar:
     )
     target_risk_pct = st.number_input("Cílový risk na pozici (%)", min_value=0.1, max_value=10.0, value=1.0, step=0.1)
     max_weight_pct = st.number_input("Max. váha jednoho aktiva (%)", min_value=1.0, max_value=100.0, value=35.0, step=1.0)
+    st.subheader("Skupinové limity Combined")
+    combined_aggressive_group_cap_pct = st.number_input(
+        "Maximum agresivní skupiny (%)", min_value=10.0, max_value=100.0, value=50.0, step=5.0
+    )
+    combined_crypto_group_cap_pct = st.number_input(
+        "Maximum kryptoměn dohromady (%)", min_value=5.0, max_value=100.0, value=25.0, step=5.0
+    )
+    combined_leveraged_group_cap_pct = st.number_input(
+        "Maximum TQQQ + SOXL dohromady (%)", min_value=5.0, max_value=100.0, value=35.0, step=5.0
+    )
     commission_bps = st.number_input("Komise (bps na stranu)", min_value=0.0, max_value=100.0, value=5.0, step=1.0)
     grid_params_upload = st.file_uploader(
         "Volitelné: per-asset parametry z walk-forward grid-search",
@@ -123,6 +133,9 @@ if run_button:
             rebalance=rebalance,
             target_risk=target_risk_pct / 100.0,
             max_asset_weight=max_weight_pct / 100.0,
+            combined_aggressive_group_cap=combined_aggressive_group_cap_pct / 100.0,
+            combined_crypto_group_cap=combined_crypto_group_cap_pct / 100.0,
+            combined_leveraged_group_cap=combined_leveraged_group_cap_pct / 100.0,
             transaction_cost_rate=commission_bps / 10_000.0,
             initial_equity=initial_equity,
             asset_params=asset_params,
