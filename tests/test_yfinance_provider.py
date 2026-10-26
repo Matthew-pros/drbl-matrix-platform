@@ -38,7 +38,7 @@ def test_yahoo_provider_uses_bounded_explicit_adjusted_download(monkeypatch) -> 
     )
 
     assert len(result.bars) == 4
-    assert calls[0]["ticker"] == "SPY"
+    assert calls[0]["ticker"] == ["SPY"]
     assert calls[0]["timeout"] == 7
     assert calls[0]["auto_adjust"] is True
     assert calls[0]["actions"] is True
