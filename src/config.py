@@ -64,6 +64,7 @@ class StrategyConfig:
     risk_vix_spike_threshold: float = 0.35
     risk_crash_daily_return: float = -0.04
     risk_crash_range_multiple: float = 3.0
+    risk_crash_cooldown_sessions: int = 5
     crisis_alm_enabled: bool = True
     crisis_alm_drawdown: float = 0.15
     crisis_alm_allocation: float = 0.10
@@ -109,6 +110,8 @@ class StrategyConfig:
             raise ValueError("Denní crash threshold musí být v intervalu (-1, 0).")
         if self.risk_crash_range_multiple <= 0:
             raise ValueError("Násobek denního rozpětí musí být kladný.")
+        if self.risk_crash_cooldown_sessions < 1:
+            raise ValueError("Crash cooldown musí být alespoň jedna obchodní seance.")
         if not 0 < self.crisis_alm_drawdown < 1:
             raise ValueError("Krizový drawdown musí být v intervalu (0, 1).")
         if not 0 < self.crisis_alm_allocation <= 1 - self.alm_cash_reserve:
