@@ -250,7 +250,8 @@ if view in {"Dashboard", "Denní doporučení"}:
                     "Ticker": preview.ticker, "Strana": preview.side, "Cílová USD": preview.target_usd,
                     "Delta USD": preview.delta_usd, "Cena": preview.estimated_price,
                     "Kusy (odhad)": preview.estimated_quantity, "Komise USD": preview.commission_usd,
-                    "Slippage USD": preview.slippage_usd, "Status": preview.status,
+                    "Slippage USD": preview.slippage_usd, "Další poplatky USD": preview.other_fees_usd,
+                    "Status": preview.status,
                     "Zdroj ceny": rec.source, "Timestamp": rec.as_of,
                 }]), use_container_width=True, hide_index=True)
                 st.caption("Volitelné: zaznamenej simulovaný fill pouze do lokálního stínového portfolia. Tím se nemění broker ani se neodesílá skutečný pokyn.")
@@ -273,6 +274,7 @@ if view in {"Dashboard", "Denní doporučení"}:
                                 side=preview.side,
                                 commission=preview.commission_usd,
                                 slippage=preview.slippage_usd,
+                                other_fees=preview.other_fees_usd,
                                 alm_tier=alm_tier,
                             )
                             st.success(
