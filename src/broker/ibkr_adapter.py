@@ -19,7 +19,12 @@ class IBKROrderAdapter(BrokerAdapter):
             from dataclasses import replace
             cfg = replace(cfg, fractional_shares=self.fractional_allowed)
         side, qty, delta, costs = preview_quantity(target_usd, current_usd, price, cfg)
-        return OrderPreview(ticker, side, target_usd, delta, price, qty, max(0.0, -delta - costs.commission_usd), costs.commission_usd, costs.slippage_usd, exchange=self.exchange)
+        return OrderPreview(
+            ticker, side, target_usd, delta, price, qty,
+            max(0.0, -delta - costs.commission_usd - costs.slippage_usd - costs.other_fees_usd),
+            costs.commission_usd, costs.slippage_usd, exchange=self.exchange,
+            other_fees_usd=costs.other_fees_usd,
+        )
 
     def submit_order(self, preview: OrderPreview, confirmed_by_user: bool = False) -> str:
         enabled = os.getenv("ENABLE_ORDER_SUBMISSION", "false").lower() == "true"
