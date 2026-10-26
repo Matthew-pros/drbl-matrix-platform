@@ -110,8 +110,9 @@ def load_data(end: str, source: str, ticker_pairs: tuple[tuple[str, str], ...]) 
     failures: list[str] = []
     end_exclusive = (pd.Timestamp(end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     request_start = "1990-01-01"
-    yahoo_batch = None
-    if not source.startswith("IBKR"):
+    use_yahoo_batch = not source.startswith("IBKR")
+    yahoo_batch = {}
+    if use_yahoo_batch:
         try:
             yahoo_batch = provider.get_many_daily_bars(
                 [ticker for _logical, ticker in ticker_pairs], request_start, end_exclusive
@@ -122,10 +123,10 @@ def load_data(end: str, source: str, ticker_pairs: tuple[tuple[str, str], ...]) 
 
     for logical, ticker in ticker_pairs:
         try:
-            if yahoo_batch is not None:
+            if use_yahoo_batch:
                 result = yahoo_batch.get(ticker)
                 if result is None:
-                    raise RuntimeError("Ticker není v odpovědi hromadného načtení.")
+                    raise RuntimeError("Ticker není v odpovědi hromadného načtení; opakuj načtení po kontrole sítě.")
             else:
                 request_ticker = "VIX" if source.startswith("IBKR") and ticker == "^VIX" else ticker
                 result = provider.get_daily_bars(request_ticker, request_start, end_exclusive)
