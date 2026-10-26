@@ -438,10 +438,10 @@ def _market_regime_history(
     risk_off = (deep_drawdown | crash_recent | high_vix | vix_spike | trend_stress | low_break_stress).astype(bool)
 
     # If VIX is missing, degrade transparently to a SPY/QQQ trend-only risk-on test.
-    both_trends_valid = spy_valid_trend & qqq_valid_trend
-    both_above = (~spy_below) & (~qqq_below)
+    # Degrade to available SPY trend evidence when QQQ/VIX history is absent.
+    trend_supports_risk_on = spy_valid_trend & (~spy_below) & ((~qqq_valid_trend) | (~qqq_below))
     low_or_missing_vix = (vix_close < 20.0) | (~vix_available)
-    risk_on = (~risk_off) & both_trends_valid & both_above & low_or_missing_vix
+    risk_on = (~risk_off) & trend_supports_risk_on & low_or_missing_vix
     transition = ~(risk_off | risk_on)
 
     reasons: list[str] = []
@@ -936,6 +936,21 @@ def run_temacd_backtest(
         metrics["average_transaction_cost_rate"] = float(trades["transaction_cost_rate"].mean())
     else:
         metrics["average_transaction_cost_rate"] = cfg.transaction_cost_rate
+    regime_log = pd.DataFrame(regime_rows).set_index("timestamp") if regime_rows else pd.DataFrame()
+    if not regime_log.empty:
+        metrics["risk_off_days"] = int(regime_log["risk_off_active"].sum())
+        metrics["risk_on_days"] = int((regime_log["market_regime"] == "RISK_ON").sum())
+        metrics["transition_days"] = int((regime_log["market_regime"] == "TRANSITION").sum())
+        metrics["risk_off_pct"] = float(regime_log["risk_off_active"].mean())
+        metrics["vix_data_available"] = bool(regime_log["vix_level"].notna().any())
+    else:
+        metrics["risk_off_days"] = 0
+        metrics["risk_on_days"] = 0
+        metrics["transition_days"] = 0
+        metrics["risk_off_pct"] = 0.0
+        metrics["vix_data_available"] = False
     benchmark_metrics["transactions"] = int(benchmark_initialized)
-    return TEMACDBacktestResult(equity, benchmark, metrics, benchmark_metrics, trades, rebalance_log,
-                                weights, indicators, warnings, float(metrics["total_transaction_costs"]))
+    return TEMACDBacktestResult(
+        equity, benchmark, metrics, benchmark_metrics, trades, rebalance_log,
+        weights, indicators, warnings, float(metrics["total_transaction_costs"]), regime_log,
+    )
