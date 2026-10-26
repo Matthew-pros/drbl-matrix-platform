@@ -126,10 +126,6 @@ def generate_matrix_recommendation(
         "reason": market_assessment.reason,
         **market_assessment.metrics,
     }
-    if len(state.positions) > 1:
-        return _recommendation(state, source, DataMode.STALE, None, "REVIEW", 0, 0,
-            "Portfolio obsahuje více než jednu spravovanou pozici; před novým obchodem je nutná ruční kontrola.", Regime.UNKNOWN, indicators, False)
-
     held = next(iter(state.positions.values()), None)
     if config.risk_overlay_enabled and market_assessment.risk_off:
         state.current_regime = Regime.C
@@ -145,6 +141,12 @@ def generate_matrix_recommendation(
             "Risk-off ochranná vrstva blokuje nové vstupy; portfolio zůstává v hotovosti. "
             + market_assessment.reason,
             Regime.C, indicators,
+        )
+    if len(state.positions) > 1:
+        return _recommendation(
+            state, source, DataMode.STALE, None, "REVIEW", 0, 0,
+            "Mimo risk-off režim obsahuje portfolio více než jednu spravovanou pozici; před novým vstupem je nutná ruční kontrola.",
+            Regime.UNKNOWN, indicators, False,
         )
     held_asset = _ticker_asset(held.ticker, config) if held else None
     selected = state.selected_asset or held_asset
