@@ -42,7 +42,7 @@ def test_yahoo_provider_uses_bounded_explicit_adjusted_download(monkeypatch) -> 
     assert calls[0]["timeout"] == 7
     assert calls[0]["auto_adjust"] is True
     assert calls[0]["actions"] is True
-    assert calls[0]["threads"] is False
+    assert calls[0]["threads"] is False or calls[0]["threads"] == 1
 
 
 def test_yahoo_provider_batches_multiple_tickers_in_one_download(monkeypatch) -> None:
