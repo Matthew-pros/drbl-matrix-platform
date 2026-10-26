@@ -8,7 +8,6 @@ Finance a simulovaných obchodů po transakčních nákladech.
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict, deque
 from datetime import date
 from pathlib import Path
 import sys
@@ -22,7 +21,8 @@ if str(ROOT) not in sys.path:
 
 from src.data.yfinance_provider import YahooFinanceProvider
 from src.strategies.temacd_rotation import (
-    AGGRESSIVE_ASSETS, CORE_ASSETS, TEMACD_UNIVERSE, TEMACDConfig, run_temacd_backtest,
+    AGGRESSIVE_ASSETS, CORE_ASSETS, TEMACD_UNIVERSE, TEMACDConfig,
+    profit_factor_fifo as _profit_factor_fifo, run_temacd_backtest,
 )
 
 HORIZONS = (1, 3, 5, 10, 20, 30)
@@ -31,37 +31,6 @@ VARIANTS = {
     "Aggressive Rotation": AGGRESSIVE_ASSETS,
     "Combined Rotation": TEMACD_UNIVERSE,
 }
-
-
-def _profit_factor_fifo(trades: pd.DataFrame) -> float:
-    """Realized profit factor after both entry and exit commissions, matched FIFO."""
-    if trades.empty:
-        return float("nan")
-    lots: dict[str, deque[list[float]]] = defaultdict(deque)
-    closed_pnl: list[float] = []
-    for row in trades.sort_values("execution_timestamp", kind="stable").itertuples(index=False):
-        ticker, side = str(row.ticker), str(row.side).upper()
-        qty, notional, fee = float(row.quantity), float(row.notional_usd), float(row.commission_usd)
-        if qty <= 0:
-            continue
-        if side == "BUY":
-            lots[ticker].append([qty, (notional + fee) / qty])
-        elif side == "SELL":
-            remaining = qty
-            unit_proceeds = (notional - fee) / qty
-            while remaining > 1e-10 and lots[ticker]:
-                lot_qty, unit_cost = lots[ticker][0]
-                matched = min(remaining, lot_qty)
-                closed_pnl.append((unit_proceeds - unit_cost) * matched)
-                remaining -= matched
-                lot_qty -= matched
-                if lot_qty <= 1e-10:
-                    lots[ticker].popleft()
-                else:
-                    lots[ticker][0][0] = lot_qty
-    gross_profit = sum(x for x in closed_pnl if x > 0)
-    gross_loss = -sum(x for x in closed_pnl if x < 0)
-    return gross_profit / gross_loss if gross_loss > 0 else (float("inf") if gross_profit > 0 else float("nan"))
 
 
 def parse_args() -> argparse.Namespace:
