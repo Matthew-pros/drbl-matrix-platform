@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import os
 
 import pandas as pd
 import streamlit as st
@@ -21,10 +22,13 @@ st.warning("Historický výzkumný backtest, nikoliv příslib výnosu. Žádné
 
 with st.sidebar:
     st.header("Parametry backtestu")
-    source_name = st.selectbox(
-        "Datový zdroj",
-        ["Yahoo Finance · bezplatná historická data", "IBKR Gateway · VPS / historická data"],
-    )
+    ibkr_enabled = os.getenv("IBKR_ENABLED", "false").strip().lower() == "true"
+    source_options = ["Yahoo Finance · bezplatná historická data"]
+    if ibkr_enabled:
+        source_options.append("IBKR Gateway · VPS / historická data")
+    source_name = st.selectbox("Datový zdroj", source_options)
+    if not ibkr_enabled:
+        st.caption("Na Streamlit Cloud je aktivní Yahoo Finance; IBKR se povoluje pouze na VPS pomocí IBKR_ENABLED=true.")
     portfolio_name = st.selectbox(
         "Portfolio",
         ["Combined Rotation", "Sector Rotation", "Aggressive Rotation"],
