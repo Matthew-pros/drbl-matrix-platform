@@ -96,18 +96,27 @@ def main() -> int:
     data: dict[str, pd.DataFrame] = {}
     coverage: list[dict[str, object]] = []
 
+    try:
+        batch = provider.get_many_daily_bars(tickers, fetch_start, fetch_end)
+    except Exception as exc:
+        batch = {}
+        batch_error = str(exc)
+    else:
+        batch_error = ""
+
     for ticker in tickers:
-        try:
-            item = provider.get_daily_bars(ticker, fetch_start, fetch_end)
-            data[ticker] = item.bars
-            coverage.append({
-                "ticker": ticker, "first_bar": item.bars.index.min().date().isoformat(),
-                "last_bar": item.bars.index.max().date().isoformat(), "bars": len(item.bars),
-                "source": item.source, "status": "OK", "warning": item.warning or "",
-            })
-        except Exception as exc:
+        item = (batch or {}).get(ticker)
+        if item is None or item.bars.empty:
+            warning = item.warning if item is not None else (batch_error or "Ticker chybí v hromadné odpovědi.")
             coverage.append({"ticker": ticker, "first_bar": "", "last_bar": "", "bars": 0,
-                             "source": "Yahoo Finance", "status": "ERROR", "warning": str(exc)})
+                             "source": "Yahoo Finance", "status": "ERROR", "warning": warning})
+            continue
+        data[ticker] = item.bars
+        coverage.append({
+            "ticker": ticker, "first_bar": item.bars.index.min().date().isoformat(),
+            "last_bar": item.bars.index.max().date().isoformat(), "bars": len(item.bars),
+            "source": item.source, "status": "OK", "warning": item.warning or "",
+        })
 
     rows: list[dict[str, object]] = []
     coverage_by_ticker = {str(row["ticker"]): row for row in coverage}
