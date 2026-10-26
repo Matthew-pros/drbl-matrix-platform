@@ -503,8 +503,8 @@ def run_temacd_backtest(
     normalized: dict[str, pd.DataFrame] = {}
     indicators: dict[str, pd.DataFrame] = {}
     warnings: list[str] = []
-    # Always prepare SPY as benchmark, even when the selected universe excludes it.
-    assets_to_prepare = tuple(dict.fromkeys((*universe, "SPY")))
+    # SPY is benchmark/session calendar; QQQ is an additional market-trend input.
+    assets_to_prepare = tuple(dict.fromkeys((*universe, "SPY", "QQQ")))
     for asset in assets_to_prepare:
         frame = data.get(asset)
         if frame is None or frame.empty:
@@ -515,6 +515,17 @@ def run_temacd_backtest(
             indicators[asset] = build_temacd_indicators(normalized[asset], cfg, asset=asset)
         except (ValueError, TypeError) as exc:
             warnings.append(f"{asset}: data/indikátory nelze použít ({exc}).")
+    raw_vix = data.get("VIX")
+    if raw_vix is None or raw_vix.empty:
+        raw_vix = data.get("^VIX")
+    if raw_vix is not None and not raw_vix.empty:
+        try:
+            normalized["VIX"] = normalize_ohlcv(raw_vix)
+        except (ValueError, TypeError) as exc:
+            warnings.append(f"VIX: historickou řadu nelze použít; režim bude degradovaný ({exc}).")
+    elif cfg.risk_overlay_enabled:
+        warnings.append("VIX není dostupný; risk overlay přechází do degradovaného trend/crash-only režimu.")
+
     if "SPY" not in normalized:
         raise ValueError("Pro backtest a benchmark je povinné OHLCV SPY.")
     spy_dates = pd.DatetimeIndex(normalized["SPY"].index).sort_values()
@@ -523,6 +534,7 @@ def run_temacd_backtest(
     dates = spy_dates[(spy_dates >= start_ts) & (spy_dates <= end_ts)]
     if len(dates) < 2:
         raise ValueError("Vybrané období musí obsahovat alespoň dvě SPY obchodní seance.")
+    regime_history = _market_regime_history(normalized, dates, cfg)
 
     cash = float(cfg.initial_equity)
     holdings: dict[str, float] = {}  # asset -> shares
@@ -533,6 +545,9 @@ def run_temacd_backtest(
     trade_rows: list[dict] = []
     rebalance_rows: list[dict] = []
     weight_rows: list[dict] = []
+    regime_rows: list[dict] = []
+    risk_off_latched = False
+    recovery_confirmation_count = 0
     benchmark_qty = 0.0
     benchmark_cash = float(cfg.initial_equity)
     benchmark_initialized = False
