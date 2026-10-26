@@ -487,6 +487,74 @@ def _market_regime_history(
     }, index=dates)
 
 
+def _apply_regime_hysteresis(
+    raw_history: pd.DataFrame,
+    config: TEMACDConfig,
+) -> pd.DataFrame:
+    """Apply a causal RISK_OFF latch and multi-session RISK_ON recovery confirmation."""
+    history = raw_history.copy()
+    regimes: list[str] = []
+    latched_rows: list[bool] = []
+    multipliers: list[float] = []
+    recovery_rows: list[int] = []
+    reasons: list[str] = []
+    latched = False
+    recovery_count = 0
+
+    for day, row in history.iterrows():
+        raw_regime = str(row["raw_market_regime"])
+        raw_risk_off = bool(row["raw_risk_off"])
+        reason = str(row["reason"])
+
+        if not config.risk_overlay_enabled:
+            latched = False
+            recovery_count = 0
+            effective = "OVERLAY_OFF"
+            risk_off_active = False
+            risk_multiplier = 1.0
+            reason = "Risk overlay disabled by configuration."
+        else:
+            if raw_risk_off:
+                latched = True
+                recovery_count = 0
+            elif latched:
+                if raw_regime == "RISK_ON":
+                    recovery_count += 1
+                else:
+                    recovery_count = 0
+                if recovery_count >= config.risk_recovery_confirmation_days:
+                    latched = False
+                    recovery_count = 0
+                    reason += (
+                        f"; recovery confirmed after {config.risk_recovery_confirmation_days} consecutive RISK_ON closes"
+                    )
+                else:
+                    reason += (
+                        f"; risk-off latch awaiting {config.risk_recovery_confirmation_days} consecutive RISK_ON closes "
+                        f"({recovery_count}/{config.risk_recovery_confirmation_days})"
+                    )
+            risk_off_active = latched
+            effective = "RISK_OFF" if risk_off_active else raw_regime
+            risk_multiplier = (
+                0.0 if risk_off_active
+                else config.transition_risk_multiplier if effective == "TRANSITION"
+                else 1.0
+            )
+
+        regimes.append(effective)
+        latched_rows.append(risk_off_active)
+        multipliers.append(risk_multiplier)
+        recovery_rows.append(recovery_count)
+        reasons.append(reason)
+
+    history["market_regime"] = regimes
+    history["risk_off_active"] = latched_rows
+    history["risk_multiplier"] = multipliers
+    history["recovery_confirmation_count"] = recovery_rows
+    history["effective_reason"] = reasons
+    return history
+
+
 def run_temacd_backtest(
     data: dict[str, pd.DataFrame],
     config: TEMACDConfig | None = None,
@@ -534,7 +602,11 @@ def run_temacd_backtest(
     dates = spy_dates[(spy_dates >= start_ts) & (spy_dates <= end_ts)]
     if len(dates) < 2:
         raise ValueError("Vybrané období musí obsahovat alespoň dvě SPY obchodní seance.")
-    regime_history = _market_regime_history(normalized, dates, cfg)
+    # Build regime state across the full available warm-up history so a risk-off
+    # latch that began before the evaluation window is not silently forgotten.
+    regime_dates = pd.DatetimeIndex(spy_dates[spy_dates <= end_ts])
+    raw_regime_history = _market_regime_history(normalized, regime_dates, cfg)
+    regime_history = _apply_regime_hysteresis(raw_regime_history, cfg)
 
     cash = float(cfg.initial_equity)
     holdings: dict[str, float] = {}  # asset -> shares
@@ -546,8 +618,6 @@ def run_temacd_backtest(
     rebalance_rows: list[dict] = []
     weight_rows: list[dict] = []
     regime_rows: list[dict] = []
-    risk_off_latched = False
-    recovery_confirmation_count = 0
     benchmark_qty = 0.0
     benchmark_cash = float(cfg.initial_equity)
     benchmark_initialized = False
@@ -645,19 +715,50 @@ def run_temacd_backtest(
         close_equity = mark_equity(day, use_open=False)
         equity_rows.append((day, close_equity))
 
+        market_state = regime_history.loc[day]
+        market_regime = str(market_state["market_regime"])
+        risk_off_active = bool(market_state["risk_off_active"])
+        risk_multiplier = float(market_state["risk_multiplier"])
+        market_regime_reason = str(market_state["effective_reason"])
+        regime_rows.append({
+            "timestamp": day,
+            "raw_market_regime": str(market_state["raw_market_regime"]),
+            "market_regime": market_regime,
+            "raw_risk_off": bool(market_state["raw_risk_off"]),
+            "risk_off_active": risk_off_active,
+            "risk_multiplier": risk_multiplier,
+            "vix_level": market_state["vix_level"],
+            "vix_change_5d": market_state["vix_change_5d"],
+            "spy_below_sma200": bool(market_state["spy_below_sma200"]),
+            "qqq_below_sma200": bool(market_state["qqq_below_sma200"]),
+            "spy_drawdown": market_state["spy_drawdown"],
+            "qqq_drawdown": market_state["qqq_drawdown"],
+            "crash_event_today": bool(market_state["crash_event_today"]),
+            "crash_event_recent": bool(market_state["crash_event_recent"]),
+            "recovery_confirmation_count": int(market_state["recovery_confirmation_count"]),
+            "reason": market_regime_reason,
+        })
+
         # Avoid creating orders that cannot execute before the selected end date.
         if idx >= len(dates) - 1:
             break
 
-        # Daily exit layer: bearish cross or loss of long-term EMA3 filter.
-        exits = []
-        for asset in holdings:
-            frame_i = indicators.get(asset)
-            if frame_i is None or day not in frame_i.index:
-                continue
-            row = frame_i.loc[day]
-            if bool(row.get("bearish_cross", False)) or not bool(row.get("trend_ok", False)):
-                exits.append(asset)
+        # Exit layer combines the normal TEMACD/EMA3 exit with the higher-priority
+        # regime overlay. Every requested liquidation executes at the next Open.
+        exits: list[str] = []
+        if risk_off_active and cfg.exit_on_risk_off:
+            exits = list(holdings)
+        else:
+            for asset in holdings:
+                frame_i = indicators.get(asset)
+                if frame_i is None or day not in frame_i.index:
+                    continue
+                row = frame_i.loc[day]
+                if bool(row.get("bearish_cross", False)) or not bool(row.get("trend_ok", False)):
+                    exits.append(asset)
+                elif market_regime == "TRANSITION" and cfg.disable_leverage_in_transition and asset in {"TQQQ", "SOXL"}:
+                    exits.append(asset)
+
         if exits:
             current_weights: dict[str, float] = {}
             current_equity = max(close_equity, 1e-9)
@@ -665,14 +766,27 @@ def run_temacd_backtest(
                 if asset not in exits:
                     mark = last_marks.get(asset, 0.0)
                     current_weights[asset] = max(0.0, quantity * mark / current_equity)
-            reason = "daily risk exit: bearish TEMACD cross / Close below EMA3 for " + ", ".join(sorted(exits))
+            if risk_off_active and cfg.exit_on_risk_off:
+                reason = "RISK_OFF liquidation scheduled for next Open; " + market_regime_reason
+                exit_event = "RISK_OFF_EXIT"
+            else:
+                reason = (
+                    "daily exit: bearish TEMACD / Close below EMA3 / leverage disabled in TRANSITION for "
+                    + ", ".join(sorted(exits))
+                )
+                exit_event = "EXIT"
             pending = (day, close_equity, current_weights, reason)
             for asset in exits:
-                rebalance_rows.append({"signal_timestamp": day, "event": "EXIT", "ticker": asset,
-                                       "close": float(indicators[asset].loc[day, "Close"]),
-                                       "ATR_pct": float(indicators[asset].loc[day, "ATR_pct"]),
-                                       "target_weight": 0.0, "momentum_score": float(indicators[asset].loc[day, "momentum_score"]),
-                                       "reason": reason})
+                row = indicators.get(asset, pd.DataFrame()).loc[day] if asset in indicators and day in indicators[asset].index else None
+                rebalance_rows.append({
+                    "signal_timestamp": day, "event": exit_event, "ticker": asset,
+                    "close": float(row["Close"]) if row is not None else last_marks.get(asset, float("nan")),
+                    "ATR_pct": float(row["ATR_pct"]) if row is not None else float("nan"),
+                    "target_weight": 0.0,
+                    "momentum_score": float(row["momentum_score"]) if row is not None else float("nan"),
+                    "market_regime": market_regime, "risk_multiplier": risk_multiplier,
+                    "reason": reason,
+                })
 
         # Scheduled weekly/monthly rotation. The decision only uses today's Close.
         next_day = dates[idx + 1]
