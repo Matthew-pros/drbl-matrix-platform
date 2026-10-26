@@ -18,18 +18,22 @@ def generate_alm_recommendation(
     Standalone ALM retains the configured 30/50/80% drawdown tiers.
     Combined may request only a distinct starter during a confirmed shock event.
     """
-    if len(state.positions) > 1:
-        return Recommendation(state.model, None, source, DataMode.STALE, False, None, "REVIEW", 0, 0, 0, 0,
-            "ALM očekává nejvýše jednu základní pozici SPY nebo QQQ.", available=False)
+    crisis_only = allow_crisis_tier and state.model == ModelName.COMBINED
     held = next(iter(state.positions.values()), None)
     held_asset = held.ticker if held else None
-    if held_asset and held_asset not in {"SPY", "QQQ"}:
+    # Standalone ALM must remain restricted to a single SPY/QQQ holding. Combined
+    # uses this function only to detect a crisis signal, even while Matrix holds TQQQ
+    # or another asset that must be closed before the crisis starter is bought.
+    if not crisis_only and len(state.positions) > 1:
+        return Recommendation(state.model, None, source, DataMode.STALE, False, None, "REVIEW", 0, 0, 0, 0,
+            "ALM očekává nejvýše jednu základní pozici SPY nebo QQQ.", available=False)
+    if not crisis_only and held_asset and held_asset not in {"SPY", "QQQ"}:
         return Recommendation(state.model, None, source, DataMode.STALE, False, None, "REVIEW", 0, 0, 0, 0,
             "ALM může držet pouze základní ETF SPY/QQQ; nejprve uzavři pozici mimo krizový univerzum.", available=False)
     candidates: list[tuple[str, float, float]] = []
     indicators: dict[str, float | None] = {}
     for ticker in ("SPY", "QQQ"):
-        if held_asset and ticker != held_asset:
+        if not crisis_only and held_asset and ticker != held_asset:
             continue
         frame = prices.get(ticker)
         if frame is None or frame.empty or "Close" not in frame:
@@ -45,7 +49,6 @@ def generate_alm_recommendation(
         candidates.append((ticker, dd, float(close.iloc[-1])))
 
     eligible: list[tuple[str, float, str, float]] = []
-    crisis_only = allow_crisis_tier and state.model == ModelName.COMBINED
     if not crisis_only:
         for ticker, dd, _ in candidates:
             for tier_key, threshold, allocation in reversed(config.alm_tiers):
@@ -53,8 +56,7 @@ def generate_alm_recommendation(
                     eligible.append((ticker, dd, tier_key, allocation))
                     break
     if crisis_only:
-        allowed = {held_asset} if held_asset else None
-        crisis_candidate = crisis_drawdown_candidate(prices, config, state.alm_levels_filled, allowed)
+        crisis_candidate = crisis_drawdown_candidate(prices, config, state.alm_levels_filled, allowed_tickers=None)
         if crisis_candidate is not None:
             ticker, dd = crisis_candidate
             eligible.append((ticker, dd, "crash_event", config.crisis_alm_allocation))
@@ -62,7 +64,10 @@ def generate_alm_recommendation(
         return Recommendation(state.model, None, source, data_mode, False, None, "HOLD", 0, 0, 0, 0,
             "SPY/QQQ nedosáhly další neprovedené ALM tranše, nebo není potvrzen krizový starter.", indicators=indicators)
     ticker, dd, tier_key, allocation = max(eligible, key=lambda item: item[1])
-    current = held.market_value_usd if held else 0.0
+    is_existing_crisis_holding = bool(
+        crisis_only and held is not None and held.ticker == ticker and state.active_alm_ticker == ticker
+    )
+    current = held.market_value_usd if (held and (not crisis_only or is_existing_crisis_holding)) else 0.0
     max_total_position = state.equity_usd * (1-config.alm_cash_reserve)
     requested_delta = state.equity_usd * allocation
     target = min(current + requested_delta, max_total_position)
