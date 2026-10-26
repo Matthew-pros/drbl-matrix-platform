@@ -9,6 +9,8 @@ def mark_to_market(state: PortfolioState, prices: dict[str, float]) -> Portfolio
             pos.market_value_usd = pos.quantity * prices[ticker] if pos.quantity else pos.market_value_usd
         if pos.market_value_usd <= 0:
             state.positions.pop(ticker, None)
+            if state.active_alm_ticker == ticker:
+                state.active_alm_ticker = None
     return state
 
 
@@ -17,34 +19,67 @@ def target_delta(state: PortfolioState, ticker: str, target_usd: float) -> float
     return target_usd - (current.market_value_usd if current else 0.0)
 
 
+def _apply_fill(
+    state: PortfolioState,
+    ticker: str,
+    target_usd: float,
+    quantity: float,
+    price: float,
+    side: str,
+    commission: float,
+    slippage: float,
+    alm_tier: str | None,
+    broker_confirmed: bool,
+) -> None:
+    side = side.upper()
+    if not ticker or price <= 0 or quantity < 0 or commission < 0 or slippage < 0 or target_usd < 0:
+        raise ValueError("Ticker, cena, množství, cílová pozice a náklady musí být validní.")
+    if side not in {"BUY", "SELL"}:
+        raise ValueError("Neznámá strana obchodu.")
+    notional = quantity * price
+    total_cost = commission + slippage
+    if side == "BUY":
+        if notional + total_cost > state.cash_usd + 1e-6:
+            raise ValueError("Nedostatek hotovosti pro simulovaný/potvrzený nákup.")
+        state.cash_usd -= notional + total_cost
+    else:
+        existing_before = state.positions.get(ticker)
+        if existing_before is None or quantity > existing_before.quantity + 1e-6:
+            raise ValueError("Prodej převyšuje aktuální množství v portfoliu.")
+        state.cash_usd += notional - total_cost
+
+    existing = state.positions.get(ticker)
+    new_value = max(0.0, target_usd)
+    if new_value <= 0.005 or (side == "SELL" and existing and existing.quantity - quantity <= 1e-8):
+        state.positions.pop(ticker, None)
+    else:
+        old_quantity = existing.quantity if existing else 0.0
+        new_quantity = old_quantity + quantity if side == "BUY" else max(0.0, old_quantity - quantity)
+        state.positions[ticker] = Position(ticker, new_value, new_quantity, price)
+
+    if alm_tier and side == "BUY" and target_usd > 0:
+        state.alm_levels_filled.add(alm_tier)
+        if state.model.value == "Combined":
+            state.active_alm_ticker = ticker
+            if broker_confirmed:
+                state.alm_completed = True
+                state.alm_fill_confirmed = True
+    elif side == "SELL" and target_usd <= 0.005 and state.active_alm_ticker == ticker:
+        state.active_alm_ticker = None
+
+
 def apply_confirmed_fill(
     state: PortfolioState, ticker: str, target_usd: float, quantity: float,
     price: float, side: str, commission: float = 0.0, alm_tier: str | None = None,
 ) -> None:
-    """Update shadow state only after an explicitly recorded simulated fill."""
-    notional = quantity * price
-    if side.upper() == "BUY":
-        if notional + commission > state.cash_usd + 1e-6:
-            raise ValueError("Nedostatek hotovosti pro potvrzený nákup.")
-        state.cash_usd -= notional + commission
-    elif side.upper() == "SELL":
-        state.cash_usd += notional - commission
-    else:
-        raise ValueError("Neznámá strana obchodu.")
+    """Update state after a broker-reported fill; only this function marks broker confirmation."""
+    _apply_fill(state, ticker, target_usd, quantity, price, side, commission, 0.0, alm_tier, True)
 
-    existing = state.positions.get(ticker)
-    new_value = max(0.0, target_usd)
-    if new_value <= 0.005:
-        state.positions.pop(ticker, None)
-    else:
-        total_qty = (existing.quantity if existing else 0.0) + (quantity if side.upper() == "BUY" else -quantity)
-        state.positions[ticker] = Position(ticker, new_value, max(0.0, total_qty), price)
 
-    if alm_tier and side.upper() == "BUY" and target_usd > 0:
-        state.alm_levels_filled.add(alm_tier)
-        if state.model.value == "Combined":
-            state.alm_completed = True
-            state.alm_fill_confirmed = True
-            state.active_alm_ticker = ticker
-    elif side.upper() == "SELL" and target_usd <= 0.005 and state.active_alm_ticker == ticker:
-        state.active_alm_ticker = None
+def apply_simulated_fill(
+    state: PortfolioState, ticker: str, target_usd: float, quantity: float,
+    price: float, side: str, commission: float = 0.0, slippage: float = 0.0,
+    alm_tier: str | None = None,
+) -> None:
+    """Record an explicitly user-confirmed paper-ledger fill; never claims broker execution."""
+    _apply_fill(state, ticker, target_usd, quantity, price, side, commission, slippage, alm_tier, False)
