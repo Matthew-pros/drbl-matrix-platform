@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data.yfinance_provider import YahooFinanceProvider
+from src.strategies.temacd_grid_search import load_asset_params_file
 from src.strategies.temacd_rotation import (
     AGGRESSIVE_ASSETS, CORE_ASSETS, TEMACD_UNIVERSE, TEMACDConfig,
     profit_factor_fifo as _profit_factor_fifo, run_temacd_backtest,
@@ -43,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-risk-pct", type=float, default=1.0)
     parser.add_argument("--max-weight-pct", type=float, default=35.0)
     parser.add_argument("--transaction-cost-bps", type=float, default=5.0, help="Náklad za každou stranu obchodu")
+    parser.add_argument("--params-file", default=None, help="Optional per-asset JSON from the grid-search runner")
     parser.add_argument("--output-dir", default="outputs/temacd_periods")
     return parser.parse_args()
 
@@ -60,6 +62,7 @@ def main() -> int:
     # Warm-up is before the earliest evaluation start so EMA/ATR indicators are initialized.
     fetch_start = (earliest - pd.DateOffset(years=args.warmup_years)).strftime("%Y-%m-%d")
     fetch_end = (end + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    asset_params = load_asset_params_file(args.params_file) if args.params_file else {}
     provider = YahooFinanceProvider()
     tickers = list(dict.fromkeys((*TEMACD_UNIVERSE, "SPY")))
     data: dict[str, pd.DataFrame] = {}
@@ -127,6 +130,7 @@ def main() -> int:
                 top_n=min(args.top_n, len(TEMACD_UNIVERSE)), rebalance=args.rebalance,
                 target_risk=args.target_risk_pct / 100, max_asset_weight=args.max_weight_pct / 100,
                 transaction_cost_rate=cost_rate, initial_equity=args.initial_equity,
+                asset_params=asset_params,
             )
             try:
                 result = run_temacd_backtest(data, cfg, start=start.date().isoformat(),
@@ -210,7 +214,7 @@ def main() -> int:
     (output / "period_metrics.md").write_text(
         "# TEMACD — historické quant metriky\n\n"
         f"Stav k {end.date().isoformat()}, počáteční equity USD {args.initial_equity:,.2f}; "
-        f"náklady {args.transaction_cost_bps:g} bps za každou stranu.\n\n"
+        f"náklady {args.transaction_cost_bps:g} bps za každou stranu; params-file={args.params_file or 'global defaults'}.\n\n"
         "CAGR/Sharpe/Sortino/MaxDD jsou vypočítány z denní equity; Profit Factor je FIFO "
         "realizovaný P&L po započtení vstupních i výstupních nákladů. N/A není nula; "
         "zkontrolujte coverage. Výsledky jsou historická simulace, ne příslib budoucí výkonnosti.\n\n"
