@@ -107,7 +107,7 @@ def test_combined_does_not_immediately_sell_recorded_crisis_alm_holding(sample_o
     rec = generate_combined_recommendation(data, state, StrategyConfig())
     assert rec.action == "HOLD"
     assert rec.ticker == "SPY"
-    assert "krizová ALM tranše" in rec.reason
+    assert "krizovou ALM tranši" in rec.reason
 
 
 def test_combined_does_not_trigger_crisis_alm_on_slow_drawdown_without_crash_bar(sample_ohlcv):
