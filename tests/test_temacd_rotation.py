@@ -29,7 +29,14 @@ def test_temacd_indicators_have_expected_columns_and_no_future_dependency():
     bars = trending_ohlcv(dates)
     cfg = TEMACDConfig()
     result = build_temacd_indicators(bars, cfg)
-    assert {"EMA1", "EMA2", "EMA3", "TEMACD", "TEMACD_Signal", "TEMACD_Hist", "RSI", "ATR_pct", "momentum_score", "trend_ok"} <= set(result.columns)
+    assert {
+        "EMA1", "EMA2", "EMA3", "TEMACD", "TEMACD_Signal", "TEMACD_Hist",
+        "RSI", "ATR_pct", "momentum_score", "trend_ok", "bullish_cross", "bearish_cross",
+    } <= set(result.columns)
+    expected_bullish_cross = (
+        (result["TEMACD_Hist"] > 0) & (result["TEMACD_Hist"].shift(1) <= 0)
+    ).fillna(False)
+    pd.testing.assert_series_equal(result["bullish_cross"], expected_bullish_cross.rename("bullish_cross"))
     assert result["indicator_ready"].sum() > 200
     # The indicator output up to t must be unchanged if only future bars are changed.
     truncated = build_temacd_indicators(bars.iloc[:400], cfg)
