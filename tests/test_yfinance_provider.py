@@ -88,3 +88,28 @@ def test_yahoo_provider_batches_multiple_tickers_in_one_download(monkeypatch) ->
     assert len(data["SPY"].bars) == 3
     assert len(data["QQQ"].bars) == 3
     assert data["SPY"].bars["Close"].iloc[-1] < data["QQQ"].bars["Close"].iloc[-1]
+
+
+def test_force_refresh_bypasses_parquet_cache(monkeypatch) -> None:
+    raw = _single_frame()
+    cache_reads: list[str] = []
+    downloads: list[list[str]] = []
+
+    def fake_read_cache(key):
+        cache_reads.append(key)
+        return raw.copy()
+
+    def fake_download(tickers, **kwargs):
+        downloads.append(list(tickers))
+        return raw.copy()
+
+    monkeypatch.setitem(sys.modules, "yfinance", SimpleNamespace(download=fake_download))
+    monkeypatch.setattr(yfinance_provider, "read_cache", fake_read_cache)
+    monkeypatch.setattr(yfinance_provider, "write_cache", lambda _key, _frame: None)
+
+    result = YahooFinanceProvider().get_many_daily_bars(
+        ["SPY"], "2025-01-01", "2025-02-01", force_refresh=True
+    )
+    assert result["SPY"].bars.equals(raw[["Open", "High", "Low", "Close", "Volume"]])
+    assert cache_reads == []
+    assert downloads == [["SPY"]]

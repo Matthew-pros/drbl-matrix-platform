@@ -42,3 +42,29 @@ def test_matrix_backtest_warns_when_momentum_warmup_missing(sample_ohlcv):
     )
     assert not result.equity.empty
     assert result.equity.index.min() >= bars.index[253]
+
+
+def test_backtest_calendar_uses_spy_sessions_when_crypto_has_weekend_bars(sample_ohlcv):
+    calendar_days = pd.date_range(sample_ohlcv.index[0], sample_ohlcv.index[-1], freq="D")
+    close = pd.Series(range(200, 200 + len(calendar_days)), index=calendar_days, dtype=float)
+    crypto = pd.DataFrame(
+        {
+            "Open": close * 0.999,
+            "High": close * 1.01,
+            "Low": close * 0.99,
+            "Close": close,
+            "Volume": 2_000_000.0,
+        },
+        index=calendar_days,
+    )
+    result = run_backtest(
+        {"SPY": sample_ohlcv, "BTC-USD": crypto},
+        ModelName.ALM,
+        StrategyConfig(),
+        CostConfig(),
+        start=sample_ohlcv.index[260].date().isoformat(),
+    )
+    spy_sessions = set(sample_ohlcv.index)
+    assert set(result.equity.index).issubset(spy_sessions)
+    if not result.trades.empty:
+        assert set(pd.to_datetime(result.trades.execution_timestamp)).issubset(spy_sessions)

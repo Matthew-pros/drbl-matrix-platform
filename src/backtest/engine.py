@@ -35,7 +35,10 @@ def run_backtest(
     asset_dates = normalized.get("SPY")
     if asset_dates is None:
         raise ValueError("Benchmarkový kalendář SPY chybí v datové sadě.")
-    full_dates = pd.DatetimeIndex(sorted(set().union(*(set(frame.index) for frame in normalized.values()))))
+    # Use SPY regular sessions as the canonical portfolio calendar. Crypto bars include
+    # weekends; unioning them here would create weekend ETF signals that cannot execute
+    # at a real Saturday/Sunday SPY/QQQ open.
+    full_dates = pd.DatetimeIndex(asset_dates.index).sort_values()
     if len(full_dates) < 254:
         raise ValueError("Nedostatečný warm-up: vyžadováno nejméně 253 historických barů.")
     start_ts = pd.Timestamp(start) if start else full_dates[0]
@@ -185,7 +188,14 @@ def run_backtest(
                 pending_tier = rec.indicators.get("alm_tier") if isinstance(rec.indicators, dict) else None
                 if pending_tier and model == ModelName.ALM:
                     alm_levels_filled.add(str(pending_tier))
-                if model == ModelName.COMBINED and not alm_first_fill_confirmed:
+                # An ordinary Matrix purchase is not an ALM fill. Combined only
+                # enters the crisis ALM sleeve after a simulated crash-tier purchase in SPY/QQQ.
+                if (
+                    model == ModelName.COMBINED
+                    and pending_tier == "crash_event"
+                    and ticker in {"SPY", "QQQ"}
+                    and not alm_first_fill_confirmed
+                ):
                     alm_first_fill_confirmed = True
                     selected_asset = ticker if ticker in ASSETS else selected_asset
             else:
