@@ -50,6 +50,10 @@ with st.sidebar:
     target_risk_pct = st.number_input("Cílový risk na pozici (%)", min_value=0.1, max_value=10.0, value=1.0, step=0.1)
     max_weight_pct = st.number_input("Max. váha jednoho aktiva (%)", min_value=1.0, max_value=100.0, value=35.0, step=1.0)
     commission_bps = st.number_input("Komise (bps na stranu)", min_value=0.0, max_value=100.0, value=5.0, step=1.0)
+    force_refresh = st.checkbox(
+        "Vynutit nové stažení místo 6h cache", value=False,
+        help="Použij jen při potřebě aktualizovat místní historickou cache; opakované stažení může trvat déle.",
+    )
     run_button = st.button("Načíst data a spustit backtest", type="primary", use_container_width=True)
 
 if run_button:
@@ -78,7 +82,7 @@ if run_button:
     bulk_data = None
     if source_name.startswith("Yahoo"):
         try:
-            bulk_data = provider.get_many_daily_bars(tickers, warmup_start, fetch_end, force_refresh=True)
+            bulk_data = provider.get_many_daily_bars(tickers, warmup_start, fetch_end, force_refresh=force_refresh)
         except Exception as exc:
             errors.append(f"Hromadné načtení Yahoo Finance selhalo: {exc}")
             bulk_data = {}
