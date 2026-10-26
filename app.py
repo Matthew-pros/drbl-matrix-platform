@@ -176,6 +176,28 @@ if not st.session_state.get("market_data_loaded", False):
         "Yahoo Finance poskytuje historická data bez garance dostupnosti. Kompletní historické "
         "řady a warm-up indikátorů se načtou až po výslovném spuštění."
     )
+    status_cols = st.columns(3)
+    status_cols[0].metric("Stav aplikace", "Připravena")
+    status_cols[1].metric("Datový zdroj", "Yahoo Finance" if source_kind.startswith("Yahoo") else "IBKR Gateway")
+    status_cols[2].metric("Síťová volání", "Zatím žádná")
+    st.subheader("Co aplikace obsahuje")
+    overview = st.columns(3)
+    overview[0].markdown(
+        "**ALM**\\n\\nStupňované tranše podle drawdownu SPY/QQQ. "
+        "V Combined režimu je ALM vyhrazen pouze pro krizový starter."
+    )
+    overview[1].markdown(
+        "**DRBL Matrix**\\n\\nMěsíční rotační faktor, trendové filtry, "
+        "ATR/RVOL/ADX a risk-off ochrana."
+    )
+    overview[2].markdown(
+        "**TEMACD rotace**\\n\\nSektorové a agresivní universe, ATR sizing, "
+        "equity vs. SPY a audit rebalancování na samostatné stránce."
+    )
+    st.info(
+        "Pro načtení dashboardu klikni vlevo na „Načíst / obnovit data“. "
+        "Pokud se stahování nezdaří, aplikace zobrazí chybu každého symbolu místo nekonečného načítání."
+    )
     st.stop()
 
 with st.spinner("Načítám historická denní data; první stažení může trvat déle…"):
