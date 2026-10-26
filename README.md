@@ -24,7 +24,7 @@ Jako výchozí soubor pro deployment zvol **`app.py`** v kořeni repozitáře. O
 
 Na Streamlit Cloud nech v levém panelu zdroj **Yahoo Finance · bezplatná historická data**. `yfinance` už je v závislostech. Jde o neplacený zdroj historických dat, nikoli garantovaný real-time feed; dostupnost i rozsah historie mohou být omezené.
 
-**Aplikace při úvodním otevření nestahuje data automaticky.** Tím je oddělen rychlý start UI od síťových požadavků, které mohou být pomalé nebo limitované. Po otevření aplikace nastav model a zdroj v sidebaru a klikni na **„Načíst / obnovit data“**. Yahoo požadavky mají pevný timeout a omezený počet pokusů; při chybě se zobrazí důvod a další pokus je výslovný.
+**Aplikace při úvodním otevření nestahuje data automaticky.** Tím je oddělen rychlý start UI od síťových požadavků, které mohou být pomalé nebo limitované. Po otevření aplikace nastav model a zdroj v sidebaru a klikni na **„Načíst / obnovit data“**. Yahoo požadavky mají pevný timeout a omezený počet pokusů; při chybě se zobrazí důvod a další pokus je výslovný. Tlačítko obnovy vynutí nové stažení i tehdy, když místní Parquet cache obsahuje stejný rozsah dat; běžná cache se po šesti hodinách považuje za zastaralou.
 
 ## Vlastní VPS + IBKR Gateway
 

@@ -74,7 +74,7 @@ if run_button:
     bulk_data = None
     if source_name.startswith("Yahoo"):
         try:
-            bulk_data = provider.get_many_daily_bars(tickers, warmup_start, fetch_end)
+            bulk_data = provider.get_many_daily_bars(tickers, warmup_start, fetch_end, force_refresh=True)
         except Exception as exc:
             errors.append(f"Hromadné načtení Yahoo Finance selhalo: {exc}")
             bulk_data = {}

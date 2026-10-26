@@ -54,7 +54,9 @@ class YahooFinanceProvider(DataProvider):
             None, DataMode.STALE, warning,
         )
 
-    def get_many_daily_bars(self, tickers: Iterable[str], start: str, end: str) -> dict[str, MarketData]:
+    def get_many_daily_bars(
+        self, tickers: Iterable[str], start: str, end: str, *, force_refresh: bool = False
+    ) -> dict[str, MarketData]:
         """Fetch/cache multiple daily series with bounded timeout and partial-failure handling."""
         symbols = list(dict.fromkeys(str(ticker).strip() for ticker in tickers if str(ticker).strip()))
         if not symbols:
@@ -64,7 +66,7 @@ class YahooFinanceProvider(DataProvider):
 
         for ticker in symbols:
             key = cache_key(ticker, start, end, "daily-auto-adjust-true-v3")
-            cached = read_cache(key)
+            cached = None if force_refresh else read_cache(key)
             if cached is not None and not cached.empty:
                 try:
                     bars = normalize_ohlcv(cached)
@@ -146,8 +148,10 @@ class YahooFinanceProvider(DataProvider):
             )
         return output
 
-    def get_daily_bars(self, ticker: str, start: str, end: str) -> MarketData:
-        result = self.get_many_daily_bars([ticker], start, end)[ticker]
+    def get_daily_bars(
+        self, ticker: str, start: str, end: str, *, force_refresh: bool = False
+    ) -> MarketData:
+        result = self.get_many_daily_bars([ticker], start, end, force_refresh=force_refresh)[ticker]
         if result.bars.empty:
             raise RuntimeError(result.warning or f"Načtení {ticker} selhalo.")
         return result

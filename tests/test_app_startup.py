@@ -10,6 +10,7 @@ def test_app_startup_does_not_fetch_market_data(monkeypatch) -> None:
         raise AssertionError("Data provider must not run until the user clicks the load button.")
 
     monkeypatch.setattr(YahooFinanceProvider, "get_daily_bars", fail_if_called)
+    monkeypatch.setattr(YahooFinanceProvider, "get_many_daily_bars", fail_if_called)
     app = AppTest.from_file("app.py").run(timeout=30)
 
     assert len(app.exception) == 0

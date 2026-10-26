@@ -98,7 +98,10 @@ costs = CostConfig(
 )
 
 @st.cache_data(ttl=900, show_spinner=False)
-def load_data(end: str, source: str, ticker_pairs: tuple[tuple[str, str], ...]) -> tuple[dict[str, pd.DataFrame], dict[str, str], str]:
+def load_data(
+    end: str, source: str, ticker_pairs: tuple[tuple[str, str], ...],
+    refresh_generation: int = 0,
+) -> tuple[dict[str, pd.DataFrame], dict[str, str], str]:
     """Načti kompletní dostupnou historii pro ALM ATH, rotaci a indikátorový warm-up."""
     if source.startswith("IBKR"):
         from src.data.ibkr_provider import IBKRProvider
@@ -115,7 +118,8 @@ def load_data(end: str, source: str, ticker_pairs: tuple[tuple[str, str], ...]) 
     if use_yahoo_batch:
         try:
             yahoo_batch = provider.get_many_daily_bars(
-                [ticker for _logical, ticker in ticker_pairs], request_start, end_exclusive
+                [ticker for _logical, ticker in ticker_pairs], request_start, end_exclusive,
+                force_refresh=refresh_generation > 0,
             )
         except Exception as exc:
             failures.append(f"Yahoo Finance hromadné načtení selhalo: {exc}")
@@ -149,9 +153,13 @@ if btc_lev:
     pairs["BTCUSD_3X"] = btc_lev
 # Deployment startup must not perform remote market-data downloads automatically.
 # The user explicitly starts the download; subsequent reruns reuse Streamlit's data cache.
+if "data_refresh_generation" not in st.session_state:
+    st.session_state["data_refresh_generation"] = 0
+
 if fetch:
     load_data.clear()
     st.session_state["market_data_loaded"] = True
+    st.session_state["data_refresh_generation"] += 1
 
 if not st.session_state.get("market_data_loaded", False):
     st.info(
@@ -166,7 +174,10 @@ if not st.session_state.get("market_data_loaded", False):
     st.stop()
 
 with st.spinner("Načítám historická denní data; první stažení může trvat déle…"):
-    market_data, source_map, load_errors = load_data(end_date.isoformat(), source_kind, tuple(pairs.items()))
+    market_data, source_map, load_errors = load_data(
+        end_date.isoformat(), source_kind, tuple(pairs.items()),
+        int(st.session_state["data_refresh_generation"]),
+    )
 if not market_data:
     # Allow retry only after another explicit click; avoid repeated slow network calls on every rerun.
     st.session_state["market_data_loaded"] = False
@@ -279,7 +290,10 @@ if view in {"Dashboard", "Denní doporučení"}:
                         type="secondary",
                     ):
                         alm_tier = rec.indicators.get("alm_tier")
-                        if alm_tier != "crash_event" or rec.ticker not in {"SPY", "QQQ"}:
+                        if model == ModelName.COMBINED:
+                            if alm_tier != "crash_event" or rec.ticker not in {"SPY", "QQQ"}:
+                                alm_tier = None
+                        elif alm_tier not in {"dd_30", "dd_50", "dd_80"} or rec.ticker not in {"SPY", "QQQ"}:
                             alm_tier = None
                         try:
                             apply_simulated_fill(
