@@ -74,9 +74,9 @@ class YahooFinanceProvider(DataProvider):
                         "Historická data z lokální cache; nejsou live.",
                     )
                     continue
-                except (ValueError, TypeError) as exc:
+                except (ValueError, TypeError):
                     # An invalid old cache should be replaced by a fresh request.
-                    warning = str(exc)
+                    pass
             pending.append(ticker)
 
         if not pending:
