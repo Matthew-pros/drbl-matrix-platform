@@ -41,8 +41,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-weight-pct", type=float, default=35.0, help="Max single-asset weight percent")
     parser.add_argument("--combined-aggressive-group-cap-pct", type=float, default=50.0)
     parser.add_argument("--combined-crypto-group-cap-pct", type=float, default=25.0)
-    parser.add_argument("--combined-leveraged-group-cap-pct", type=float, default=35.0)
+    parser.add_argument("--combined-leveraged-group-cap-pct", type=float, default=20.0)
     parser.add_argument("--transaction-cost-bps", type=float, default=5.0, help="Cost per buy/sell side in basis points; 5 bps = 0.05%%")
+    parser.add_argument("--risk-off-vix-threshold", type=float, default=30.0)
+    parser.add_argument("--risk-recovery-days", type=int, default=2)
+    parser.add_argument("--transition-risk-multiplier", type=float, default=0.5)
+    parser.add_argument("--no-risk-overlay", action="store_true")
+    parser.add_argument("--no-exit-on-risk-off", action="store_true")
     parser.add_argument("--ema-fast", type=int, default=10)
     parser.add_argument("--ema-mid", type=int, default=30)
     parser.add_argument("--ema-slow", type=int, default=120)
@@ -71,7 +76,7 @@ def main() -> int:
     errors: list[str] = []
     print(f"Loading daily Yahoo Finance bars from {warmup_start} through {end_exclusive} (exclusive end)…")
     try:
-        batch = provider.get_many_daily_bars(TEMACD_UNIVERSE, warmup_start, end_exclusive)
+        batch = provider.get_many_daily_bars(tuple(dict.fromkeys((*TEMACD_UNIVERSE, "^VIX"))), warmup_start, end_exclusive)
     except Exception as exc:
         batch = {}
         errors.append(f"Bulk Yahoo Finance request failed: {exc}")
@@ -85,6 +90,15 @@ def main() -> int:
         market_data[ticker] = item.bars
         print(f"  {ticker:8} {len(item.bars):5} bars, last={item.last_timestamp}")
 
+    vix_item = (batch or {}).get("^VIX")
+    if vix_item is not None and not vix_item.bars.empty:
+        market_data["VIX"] = vix_item.bars
+    else:
+        errors.append(
+            f"^VIX: {vix_item.warning if vix_item is not None else 'Ticker missing in batch response'}; "
+            "overlay will degrade to available price-trend mode."
+        )
+
     asset_params = load_asset_params_file(args.params_file) if args.params_file else {}
     config = TEMACDConfig(
         ema_fast=args.ema_fast, ema_mid=args.ema_mid, ema_slow=args.ema_slow,
@@ -95,6 +109,11 @@ def main() -> int:
         combined_aggressive_group_cap=args.combined_aggressive_group_cap_pct / 100.0,
         combined_crypto_group_cap=args.combined_crypto_group_cap_pct / 100.0,
         combined_leveraged_group_cap=args.combined_leveraged_group_cap_pct / 100.0,
+        risk_off_vix_threshold=args.risk_off_vix_threshold,
+        risk_recovery_confirmation_days=args.risk_recovery_days,
+        transition_risk_multiplier=args.transition_risk_multiplier,
+        risk_overlay_enabled=not args.no_risk_overlay,
+        exit_on_risk_off=not args.no_exit_on_risk_off,
         transaction_cost_rate=args.transaction_cost_bps / 10_000.0,
         initial_equity=args.initial_equity,
         asset_params=asset_params,
@@ -111,6 +130,11 @@ def main() -> int:
             "combined_aggressive_group_cap_pct": args.combined_aggressive_group_cap_pct,
             "combined_crypto_group_cap_pct": args.combined_crypto_group_cap_pct,
             "combined_leveraged_group_cap_pct": args.combined_leveraged_group_cap_pct,
+            "risk_overlay_enabled": not args.no_risk_overlay,
+            "exit_on_risk_off": not args.no_exit_on_risk_off,
+            "risk_off_vix_threshold": args.risk_off_vix_threshold,
+            "risk_recovery_days": args.risk_recovery_days,
+            "transition_risk_multiplier": args.transition_risk_multiplier,
             "transaction_cost_bps_per_side": args.transaction_cost_bps,
             "initial_equity": args.initial_equity,
             "ema": [args.ema_fast, args.ema_mid, args.ema_slow],
@@ -128,6 +152,7 @@ def main() -> int:
     result.trades.to_csv(output_dir / "trades.csv", index=False)
     result.rebalance_log.to_csv(output_dir / "rebalance_log.csv", index=False)
     result.weights.to_csv(output_dir / "weights.csv", index=False)
+    result.regime_log.to_csv(output_dir / "regime_log.csv", index_label="Date")
     pd.concat([result.equity, result.benchmark_equity], axis=1).to_csv(output_dir / "equity.csv", index_label="Date")
 
     fig = go.Figure()

@@ -115,3 +115,43 @@ def test_standalone_aggressive_rotation_does_not_apply_combined_group_cap():
     candidates = [("TQQQ", 0.9, 0.01), ("SOXL", 0.8, 0.01), ("SMH", 0.7, 0.01)]
     weights = _target_weights(candidates, cfg, apply_combined_group_caps=False)
     assert sum(weights.values()) == pytest.approx(1.0)
+
+
+def test_temacd_vix_risk_off_liquidates_portfolio_and_exports_regime_log():
+    dates = pd.bdate_range("2017-01-03", periods=1100)
+    assets = {
+        asset: trending_ohlcv(dates, scale=1.0 + i * 0.02, noise=0.003)
+        for i, asset in enumerate(TEMACD_UNIVERSE)
+    }
+    vix = trending_ohlcv(dates, scale=0.42, noise=0.001)
+    vix["Close"] = 42.0
+    vix["Open"] = 42.0
+    vix["High"] = 43.0
+    vix["Low"] = 41.0
+    assets["VIX"] = vix
+    start = dates[850].date().isoformat()
+    end = dates[-1].date().isoformat()
+    result = run_temacd_backtest(
+        assets,
+        TEMACDConfig(top_n=3, rebalance="monthly", initial_equity=50_000, risk_off_vix_threshold=30),
+        start=start, end=end,
+    )
+    assert not result.regime_log.empty
+    assert result.regime_log["risk_off_active"].all()
+    assert (result.regime_log["market_regime"] == "RISK_OFF").all()
+    assert result.metrics["risk_off_days"] == len(result.regime_log)
+    assert result.trades.empty
+
+
+def test_regime_latch_requires_two_risk_on_closes_before_recovery():
+    from src.strategies.temacd_rotation import _apply_regime_hysteresis
+
+    dates = pd.bdate_range("2024-01-01", periods=5)
+    raw = pd.DataFrame({
+        "raw_market_regime": ["RISK_ON", "RISK_OFF", "TRANSITION", "RISK_ON", "RISK_ON"],
+        "raw_risk_off": [False, True, False, False, False],
+        "reason": ["on", "stress", "mixed", "recover1", "recover2"],
+    }, index=dates)
+    result = _apply_regime_hysteresis(raw, TEMACDConfig(risk_recovery_confirmation_days=2))
+    assert result["market_regime"].tolist() == ["RISK_ON", "RISK_OFF", "RISK_OFF", "RISK_OFF", "RISK_ON"]
+    assert result["risk_off_active"].tolist() == [False, True, True, True, False]

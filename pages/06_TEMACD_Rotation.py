@@ -59,7 +59,7 @@ with st.sidebar:
         "Maximum kryptoměn dohromady (%)", min_value=5.0, max_value=100.0, value=25.0, step=5.0
     )
     combined_leveraged_group_cap_pct = st.number_input(
-        "Maximum TQQQ + SOXL dohromady (%)", min_value=5.0, max_value=100.0, value=35.0, step=5.0
+        "Maximum TQQQ + SOXL dohromady (%)", min_value=5.0, max_value=100.0, value=20.0, step=5.0
     )
     commission_bps = st.number_input("Komise (bps na stranu)", min_value=0.0, max_value=100.0, value=5.0, step=1.0)
     grid_params_upload = st.file_uploader(
@@ -67,6 +67,13 @@ with st.sidebar:
         type=["json"],
         help="Vygeneruj soubor příkazem scripts/run_temacd_grid_search.py. Bez souboru se použijí zdokumentované globální defaulty.",
     )
+    st.subheader("Tržní režim / ochrana")
+    risk_overlay_enabled = st.checkbox("Zapnout risk-off filtr", value=True)
+    exit_on_risk_off = st.checkbox("V risk-off zavřít běžné pozice do cash", value=True)
+    risk_off_vix_threshold = st.number_input("Risk-off: VIX ≥", min_value=15.0, max_value=80.0, value=30.0, step=1.0)
+    transition_risk_multiplier = st.slider("Risk factor v transition (%)", min_value=10, max_value=100, value=50, step=10) / 100.0
+    disable_leverage_in_transition = st.checkbox("V transition blokovat nové TQQQ/SOXL", value=True)
+    risk_recovery_days = st.slider("Po sobě jdoucí RISK_ON seance pro odemčení", min_value=1, max_value=10, value=2)
     force_refresh = st.checkbox(
         "Vynutit nové stažení místo 6h cache", value=False,
         help="Použij jen při potřebě aktualizovat místní historickou cache; opakované stažení může trvat déle.",
@@ -101,7 +108,7 @@ if run_button:
 
     warmup_start = (pd.Timestamp(start_date) - pd.DateOffset(years=3)).strftime("%Y-%m-%d")
     fetch_end = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    tickers = list(dict.fromkeys((*universe, "SPY")))
+    tickers = list(dict.fromkeys((*universe, "SPY", "QQQ", "^VIX")))
     market_data: dict[str, pd.DataFrame] = {}
     errors: list[str] = []
     bulk_data = None
@@ -122,6 +129,8 @@ if run_button:
             else:
                 item = provider.get_daily_bars(ticker, warmup_start, fetch_end)
             market_data[ticker] = item.bars
+            if ticker == "^VIX":
+                market_data["VIX"] = item.bars
         except Exception as exc:
             errors.append(f"{ticker}: {exc}")
         progress.progress((i + 1) / len(tickers), text=f"Načítání {ticker} ({i + 1}/{len(tickers)})")
@@ -136,6 +145,12 @@ if run_button:
             combined_aggressive_group_cap=combined_aggressive_group_cap_pct / 100.0,
             combined_crypto_group_cap=combined_crypto_group_cap_pct / 100.0,
             combined_leveraged_group_cap=combined_leveraged_group_cap_pct / 100.0,
+            risk_overlay_enabled=risk_overlay_enabled,
+            exit_on_risk_off=exit_on_risk_off,
+            risk_off_vix_threshold=risk_off_vix_threshold,
+            risk_recovery_confirmation_days=risk_recovery_days,
+            transition_risk_multiplier=transition_risk_multiplier,
+            disable_leverage_in_transition=disable_leverage_in_transition,
             transaction_cost_rate=commission_bps / 10_000.0,
             initial_equity=initial_equity,
             asset_params=asset_params,
@@ -175,6 +190,20 @@ if run_button:
     m7.metric("Profit Factor (realizované obchody)", profit_factor_text)
     m8.metric("Calmar", f"{result.metrics.get('calmar', float('nan')):.2f}")
     m9.metric("Transakční náklady", f"${result.total_transaction_costs:,.2f}")
+    r1, r2, r3 = st.columns(3)
+    r1.metric("RISK_OFF dny", int(result.metrics.get("risk_off_days", 0)))
+    r2.metric("RISK_OFF podíl", f"{float(result.metrics.get('risk_off_pct', 0.0)):.1%}")
+    r3.metric("TRANSITION dny", int(result.metrics.get("transition_days", 0)))
+    with st.expander("Historie tržního režimu / VIX"):
+        if result.regime_log.empty:
+            st.info("Regime log není k dispozici.")
+        else:
+            st.dataframe(result.regime_log.tail(250), use_container_width=True)
+            st.download_button(
+                "Stáhnout regime_log.csv",
+                result.regime_log.to_csv(index=True).encode("utf-8"),
+                "regime_log.csv", "text/csv",
+            )
 
     st.subheader("Equity křivka vs. SPY Buy & Hold")
     st.line_chart(pd.concat([result.equity, result.benchmark_equity], axis=1).sort_index())

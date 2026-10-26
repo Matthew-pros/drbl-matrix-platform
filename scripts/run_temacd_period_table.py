@@ -45,8 +45,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-weight-pct", type=float, default=35.0)
     parser.add_argument("--combined-aggressive-group-cap-pct", type=float, default=50.0)
     parser.add_argument("--combined-crypto-group-cap-pct", type=float, default=25.0)
-    parser.add_argument("--combined-leveraged-group-cap-pct", type=float, default=35.0)
+    parser.add_argument("--combined-leveraged-group-cap-pct", type=float, default=20.0)
     parser.add_argument("--transaction-cost-bps", type=float, default=5.0, help="Náklad za každou stranu obchodu")
+    parser.add_argument("--risk-off-vix-threshold", type=float, default=30.0)
+    parser.add_argument("--risk-recovery-days", type=int, default=2)
+    parser.add_argument("--transition-risk-multiplier", type=float, default=0.5)
+    parser.add_argument("--no-risk-overlay", action="store_true")
+    parser.add_argument("--no-exit-on-risk-off", action="store_true")
     parser.add_argument("--params-file", default=None, help="Optional per-asset JSON from the grid-search runner")
     parser.add_argument("--output-dir", default="outputs/temacd_periods")
     return parser.parse_args()
@@ -67,7 +72,7 @@ def main() -> int:
     fetch_end = (end + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     asset_params = load_asset_params_file(args.params_file) if args.params_file else {}
     provider = YahooFinanceProvider()
-    tickers = list(dict.fromkeys((*TEMACD_UNIVERSE, "SPY")))
+    tickers = list(dict.fromkeys((*TEMACD_UNIVERSE, "^VIX")))
     data: dict[str, pd.DataFrame] = {}
     coverage: list[dict[str, object]] = []
 
@@ -87,6 +92,8 @@ def main() -> int:
                              "source": "Yahoo Finance", "status": "ERROR", "warning": warning})
             continue
         data[ticker] = item.bars
+        if ticker == "^VIX":
+            data["VIX"] = item.bars
         coverage.append({
             "ticker": ticker, "first_bar": item.bars.index.min().date().isoformat(),
             "last_bar": item.bars.index.max().date().isoformat(), "bars": len(item.bars),
@@ -135,6 +142,11 @@ def main() -> int:
                 combined_aggressive_group_cap=args.combined_aggressive_group_cap_pct / 100,
                 combined_crypto_group_cap=args.combined_crypto_group_cap_pct / 100,
                 combined_leveraged_group_cap=args.combined_leveraged_group_cap_pct / 100,
+                risk_off_vix_threshold=args.risk_off_vix_threshold,
+                risk_recovery_confirmation_days=args.risk_recovery_days,
+                transition_risk_multiplier=args.transition_risk_multiplier,
+                risk_overlay_enabled=not args.no_risk_overlay,
+                exit_on_risk_off=not args.no_exit_on_risk_off,
                 transaction_cost_rate=cost_rate, initial_equity=args.initial_equity,
                 asset_params=asset_params,
             )
@@ -152,6 +164,9 @@ def main() -> int:
                     "cagr_pct": float(m["cagr"] * 100),
                     "sharpe": float(m["sharpe"]), "sortino": float(m["sortino"]),
                     "profit_factor": _profit_factor_fifo(result.trades),
+                    "risk_off_days": int(result.metrics.get("risk_off_days", 0)),
+                    "risk_off_pct": float(result.metrics.get("risk_off_pct", 0.0)) * 100.0,
+                    "transition_days": int(result.metrics.get("transition_days", 0)),
                     "trades": len(result.trades), "fees_usd": float(result.total_transaction_costs),
                     "coverage": (
                         ("PARTIAL; missing=" + ",".join(missing) if missing else "OK")
@@ -182,6 +197,7 @@ def main() -> int:
                 result.trades.to_csv(output / f"trades_{variant_slug}_{horizon}y.csv", index=False)
                 result.rebalance_log.to_csv(output / f"rebalance_{variant_slug}_{horizon}y.csv", index=False)
                 result.weights.to_csv(output / f"weights_{variant_slug}_{horizon}y.csv", index=False)
+                result.regime_log.to_csv(output / f"regime_{variant_slug}_{horizon}y.csv", index_label="Date")
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=result.equity.index, y=result.equity.values, mode="lines", name=variant))
                 fig.add_trace(go.Scatter(x=result.benchmark_equity.index, y=result.benchmark_equity.values, mode="lines", name="SPY Buy & Hold"))
@@ -200,6 +216,7 @@ def main() -> int:
     pd.DataFrame(coverage).to_csv(output / "data_coverage.csv", index=False)
     display_columns = ["portfolio", "horizon_years", "net_profit_usd", "net_profit_pct",
                        "max_drawdown_pct", "cagr_pct", "sharpe", "sortino", "profit_factor",
+                       "risk_off_days", "risk_off_pct", "transition_days",
                        "trades", "fees_usd", "coverage"]
     display = results[display_columns].copy()
 

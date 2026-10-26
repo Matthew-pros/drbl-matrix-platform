@@ -282,10 +282,12 @@ def download_and_run_grid_search(
     total_years = train_years + oos_years + warmup_years
     start = (end_ts - pd.DateOffset(years=total_years)).strftime("%Y-%m-%d")
     end_exclusive = (end_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    requested = tuple(dict.fromkeys((*tickers, "SPY")))
+    requested = tuple(dict.fromkeys((*tickers, "SPY", "QQQ", "^VIX")))
     provider = YahooFinanceProvider()
     market_data = provider.get_many_daily_bars(requested, start, end_exclusive)
     data = {ticker: item.bars for ticker, item in market_data.items() if item is not None and not item.bars.empty}
+    if "^VIX" in data:
+        data["VIX"] = data["^VIX"]
     warnings = [
         f"{ticker}: {item.warning or 'historie není dostupná'}"
         for ticker, item in market_data.items() if item is None or item.bars.empty
