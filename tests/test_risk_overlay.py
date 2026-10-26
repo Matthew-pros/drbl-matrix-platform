@@ -221,3 +221,13 @@ def test_disabling_risk_overlay_also_disables_crisis_starter(sample_ohlcv):
     state = PortfolioState(ModelName.COMBINED, 100_000, selected_asset="SPY")
     rec = generate_combined_recommendation(data, state, cfg)
     assert rec.indicators.get("alm_tier") is None
+
+
+def test_market_regime_degrades_transparently_when_vix_is_missing():
+    index = pd.bdate_range("2022-01-03", periods=320)
+    close = pd.Series(np.linspace(80.0, 160.0, len(index)), index=index)
+    frame = _ohlcv(close)
+    assessment = assess_market_regime({"SPY": frame, "QQQ": frame.copy()}, StrategyConfig())
+    assert assessment.regime == "RISK_ON"
+    assert assessment.risk_off is False
+    assert "degradovaném režimu" in assessment.reason

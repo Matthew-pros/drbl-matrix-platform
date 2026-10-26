@@ -135,9 +135,15 @@ def assess_market_regime(prices: dict[str, pd.DataFrame], config: StrategyConfig
         return MarketRegimeAssessment("RISK_OFF", True, "; ".join(dict.fromkeys(reasons)), metrics)
 
     spy_above = trend_below_200.get("SPY") is False
-    qqq_above = trend_below_200.get("QQQ") is False
-    if spy_above and qqq_above and vix_level is not None and vix_level < 20:
-        return MarketRegimeAssessment("RISK_ON", False, "SPY i QQQ jsou nad SMA200 a VIX je pod 20.", metrics)
+    qqq_value = trend_below_200.get("QQQ")
+    qqq_above_or_missing = qqq_value is False or qqq_value is None
+    low_or_missing_vix = vix_level is None or vix_level < 20
+    if spy_above and qqq_above_or_missing and low_or_missing_vix:
+        if vix_level is None or qqq_value is None:
+            reason = "RISK_ON v degradovaném režimu: využívá dostupný trend SPY/QQQ; VIX nebo QQQ chybí."
+        else:
+            reason = "SPY i QQQ jsou nad SMA200 a VIX je pod 20."
+        return MarketRegimeAssessment("RISK_ON", False, reason, metrics)
 
     reason = "Přechodový režim; není aktivní risk-off spouštěč."
     if vix_level is None:
