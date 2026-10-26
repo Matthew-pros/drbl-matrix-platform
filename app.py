@@ -128,10 +128,25 @@ if gld_lev:
     pairs["GLD_3X"] = gld_lev
 if btc_lev:
     pairs["BTCUSD_3X"] = btc_lev
+# Deployment startup must not perform remote market-data downloads automatically.
+# The user explicitly starts the download; subsequent reruns reuse Streamlit's data cache.
 if fetch:
     load_data.clear()
-    st.rerun()
-with st.spinner("Načítám kompletní dostupnou denní historii pro warm-up a backtest…"):
+    st.session_state["market_data_loaded"] = True
+
+if not st.session_state.get("market_data_loaded", False):
+    st.info(
+        "Aplikace je připravena. Historická data se zatím nestahují, aby se úvodní načtení "
+        "na Streamlit Cloud nezablokovalo. Zkontroluj nastavení a v levém panelu klikni na "
+        "„Načíst / obnovit data“."
+    )
+    st.caption(
+        "Yahoo Finance poskytuje historická data bez garance dostupnosti. Kompletní historické "
+        "řady a warm-up indikátorů se načtou až po výslovném spuštění."
+    )
+    st.stop()
+
+with st.spinner("Načítám historická denní data; první stažení může trvat déle…"):
     market_data, source_map, load_errors = load_data(end_date.isoformat(), source_kind, tuple(pairs.items()))
 if not market_data:
     st.error("Není dostupná použitelná historie. Zkontroluj připojení, názvy tickerů a případná data subscription.")
