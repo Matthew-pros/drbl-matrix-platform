@@ -158,6 +158,53 @@ def _metrics(equity: pd.Series) -> dict[str, float | int]:
             "ending_equity": float(clean.iloc[-1])}
 
 
+
+
+def _closed_trade_pnls_fifo(trades: pd.DataFrame) -> list[float]:
+    """Realized lot-level P&L matched FIFO with both entry and exit fees included."""
+    from collections import defaultdict, deque
+
+    if trades.empty:
+        return []
+    lots: dict[str, deque[list[float]]] = defaultdict(deque)
+    closed_pnl: list[float] = []
+    for row in trades.sort_values("execution_timestamp", kind="stable").itertuples(index=False):
+        ticker, side = str(row.ticker), str(row.side).upper()
+        quantity = float(row.quantity)
+        notional = float(row.notional_usd)
+        fee = float(row.commission_usd)
+        if quantity <= 0:
+            continue
+        if side == "BUY":
+            lots[ticker].append([quantity, (notional + fee) / quantity])
+        elif side == "SELL":
+            remaining = quantity
+            unit_proceeds = (notional - fee) / quantity
+            while remaining > 1e-10 and lots[ticker]:
+                lot_quantity, unit_cost = lots[ticker][0]
+                matched = min(remaining, lot_quantity)
+                closed_pnl.append((unit_proceeds - unit_cost) * matched)
+                remaining -= matched
+                lot_quantity -= matched
+                if lot_quantity <= 1e-10:
+                    lots[ticker].popleft()
+                else:
+                    lots[ticker][0][0] = lot_quantity
+    return closed_pnl
+
+
+def profit_factor_fifo(trades: pd.DataFrame) -> float:
+    """Realized gross profit / gross loss after fees; open lots do not count as closed trades."""
+    closed_pnl = _closed_trade_pnls_fifo(trades)
+    gross_profit = sum(value for value in closed_pnl if value > 0)
+    gross_loss = -sum(value for value in closed_pnl if value < 0)
+    if gross_loss > 0:
+        return float(gross_profit / gross_loss)
+    if gross_profit > 0:
+        return float("inf")
+    return float("nan")
+
+
 def _period_key(day: pd.Timestamp, rebalance: str) -> tuple[int, ...]:
     if rebalance == "weekly":
         iso = day.isocalendar()
@@ -412,6 +459,15 @@ def run_temacd_backtest(
     weights = pd.DataFrame(weight_rows)
     metrics = _metrics(equity)
     benchmark_metrics = _metrics(benchmark)
+    dd_abs = float(metrics.get("max_drawdown", float("nan")))
+    cagr_value = float(metrics.get("cagr", float("nan")))
+    metrics["calmar"] = cagr_value / dd_abs if np.isfinite(cagr_value) and np.isfinite(dd_abs) and dd_abs > 0 else float("nan")
+    metrics["profit_factor"] = profit_factor_fifo(trades)
+    closed_pnls = _closed_trade_pnls_fifo(trades)
+    metrics["win_rate"] = (
+        float(sum(value > 0 for value in closed_pnls) / len(closed_pnls))
+        if closed_pnls else float("nan")
+    )
     metrics["transactions"] = int(len(trades))
     metrics["total_transaction_costs"] = float(trades["commission_usd"].sum()) if not trades.empty else 0.0
     if not trades.empty:
