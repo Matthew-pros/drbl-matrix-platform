@@ -56,6 +56,7 @@ def run_backtest(
     last_rotation_month: str | None = None
     alm_levels_filled: set[str] = set()
     alm_first_fill_confirmed = False
+    active_alm_ticker: str | None = None
     equity_rows: list[tuple[pd.Timestamp, float]] = []
     log: list[dict] = []
     warnings: list[str] = []
@@ -80,13 +81,21 @@ def run_backtest(
         if model in {ModelName.DRBL_MATRIX, ModelName.COMBINED} and signal_date <= end_ts:
             scheduled = month_rotation_date(signal_date.year, signal_date.month)
             month = signal_date.strftime("%Y-%m")
-            rotation_enabled = model == ModelName.DRBL_MATRIX or (alm_first_fill_confirmed and bool(holdings))
+            # Combined rotates as Matrix by default, pauses rotation while the crisis
+            # ALM sleeve is active, and resumes Matrix after the ALM sleeve is closed.
+            rotation_enabled = model == ModelName.DRBL_MATRIX or (
+                model == ModelName.COMBINED and active_alm_ticker is None
+            )
             # Initial leader is selected at the first date where all lookback scores exist;
             # subsequent changes only occur on the exchange-calendar scheduled date.
             initial_scores_ready = selected_asset is None and int((dates <= signal_date).sum()) >= 253
             should_rotate = (initial_scores_ready and last_rotation_month is None) or (scheduled is not None and signal_date.date() >= scheduled and last_rotation_month != month)
             if rotation_enabled and should_rotate:
-                state_for_rotation = PortfolioState(model, cash, _positions(holdings, signal_closes), selected_asset=selected_asset, last_rotation_month=last_rotation_month)
+                state_for_rotation = PortfolioState(
+                    model, cash, _positions(holdings, signal_closes), selected_asset=selected_asset,
+                    last_rotation_month=last_rotation_month, active_alm_ticker=active_alm_ticker,
+                    alm_levels_filled=set(alm_levels_filled),
+                )
                 history = {key: frame.loc[:signal_date] for key, frame in normalized.items() if key in ASSETS}
                 # Avoid selecting a different asset again on every day before the first scheduled event.
                 new_asset, changed, scores = process_monthly_rotation(history, state_for_rotation, config, signal_date.date().isoformat())
@@ -106,7 +115,7 @@ def run_backtest(
             model, cash, _positions(holdings, marks),
             alm_completed=alm_first_fill_confirmed, alm_fill_confirmed=alm_first_fill_confirmed,
             selected_asset=selected_asset, last_rotation_month=last_rotation_month,
-            alm_levels_filled=set(alm_levels_filled),
+            alm_levels_filled=set(alm_levels_filled), active_alm_ticker=active_alm_ticker,
         )
         try:
             if model == ModelName.ALM:
@@ -188,16 +197,17 @@ def run_backtest(
                 pending_tier = rec.indicators.get("alm_tier") if isinstance(rec.indicators, dict) else None
                 if pending_tier and model == ModelName.ALM:
                     alm_levels_filled.add(str(pending_tier))
-                # An ordinary Matrix purchase is not an ALM fill. Combined only
-                # enters the crisis ALM sleeve after a simulated crash-tier purchase in SPY/QQQ.
+                # Ordinary Matrix purchases never mark ALM complete. A successful
+                # crisis starter is separately tracked so Combined cannot re-buy it daily
+                # or route that holding back through the Matrix leader.
                 if (
                     model == ModelName.COMBINED
                     and pending_tier == "crash_event"
                     and ticker in {"SPY", "QQQ"}
-                    and not alm_first_fill_confirmed
                 ):
+                    alm_levels_filled.add("crash_event")
+                    active_alm_ticker = ticker
                     alm_first_fill_confirmed = True
-                    selected_asset = ticker if ticker in ASSETS else selected_asset
             else:
                 qty = min(qty, current_qty)
                 if qty <= 0:
@@ -209,6 +219,8 @@ def run_backtest(
                 holdings[ticker]["quantity"] -= qty
                 if holdings[ticker]["quantity"] <= 1e-8:
                     holdings.pop(ticker, None)
+                    if active_alm_ticker == ticker:
+                        active_alm_ticker = None
             holdings.setdefault(ticker, {"quantity": 0.0, "last_price": fill_price})["last_price"] = fill_price
             log.append({
                 "signal_timestamp": signal_date, "execution_timestamp": next_date, "ticker": ticker,
