@@ -109,13 +109,29 @@ def load_data(end: str, source: str, ticker_pairs: tuple[tuple[str, str], ...]) 
     data_source: dict[str, str] = {}
     failures: list[str] = []
     end_exclusive = (pd.Timestamp(end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    request_start = "1990-01-01"
+    yahoo_batch = None
+    if not source.startswith("IBKR"):
+        try:
+            yahoo_batch = provider.get_many_daily_bars(
+                [ticker for _logical, ticker in ticker_pairs], request_start, end_exclusive
+            )
+        except Exception as exc:
+            failures.append(f"Yahoo Finance hromadné načtení selhalo: {exc}")
+            LOG.warning("Hromadné načtení Yahoo Finance selhalo: %s", exc)
+
     for logical, ticker in ticker_pairs:
         try:
-            result = provider.get_daily_bars(ticker, "1990-01-01", end_exclusive)
+            if yahoo_batch is not None:
+                result = yahoo_batch.get(ticker)
+                if result is None:
+                    raise RuntimeError("Ticker není v odpovědi hromadného načtení.")
+            else:
+                request_ticker = "VIX" if source.startswith("IBKR") and ticker == "^VIX" else ticker
+                result = provider.get_daily_bars(request_ticker, request_start, end_exclusive)
             if result.bars.empty:
-                failures.append(f"{logical} ({ticker}): prázdná historie")
-                continue
-            # Both logical key and actual ticker key are kept so the strategy and execution layer can resolve exact instruments.
+                raise RuntimeError(result.warning or "prázdná historie")
+            # Keep logical and provider ticker aliases for downstream strategy lookups.
             data[logical] = result.bars
             data[ticker] = result.bars
             data_source[logical] = f"{result.source} · {result.mode.value} · {result.last_timestamp}"
