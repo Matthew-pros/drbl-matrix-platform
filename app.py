@@ -183,15 +183,15 @@ if not st.session_state.get("market_data_loaded", False):
     st.subheader("Co aplikace obsahuje")
     overview = st.columns(3)
     overview[0].markdown(
-        "**ALM**\\n\\nStupňované tranše podle drawdownu SPY/QQQ. "
+        "**ALM**\n\nStupňované tranše podle drawdownu SPY/QQQ. "
         "V Combined režimu je ALM vyhrazen pouze pro krizový starter."
     )
     overview[1].markdown(
-        "**DRBL Matrix**\\n\\nMěsíční rotační faktor, trendové filtry, "
+        "**DRBL Matrix**\n\nMěsíční rotační faktor, trendové filtry, "
         "ATR/RVOL/ADX a risk-off ochrana."
     )
     overview[2].markdown(
-        "**TEMACD rotace**\\n\\nSektorové a agresivní universe, ATR sizing, "
+        "**TEMACD rotace**\n\nSektorové a agresivní universe, ATR sizing, "
         "equity vs. SPY a audit rebalancování na samostatné stránce."
     )
     st.info(
