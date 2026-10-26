@@ -205,13 +205,14 @@ with st.spinner("Načítám historická denní data; první stažení může trv
         end_date.isoformat(), source_kind, tuple(pairs.items()),
         int(st.session_state["data_refresh_generation"]),
     )
-if not market_data:
-    # Allow retry only after another explicit click; avoid repeated slow network calls on every rerun.
+if not market_data or "SPY" not in market_data:
+    # SPY is the required exchange-session calendar and benchmark. Partial data for
+    # other tickers must not let the app continue into misleading recommendations.
     st.session_state["market_data_loaded"] = False
-    st.error("Není dostupná použitelná historie. Zkontroluj připojení, názvy tickerů a případná data subscription.")
+    st.error("Nepodařilo se načíst povinná historická data SPY. Bez SPY nelze bezpečně sestavit kalendář portfolia ani benchmark.")
     if load_errors:
         st.code(load_errors)
-    st.info("Zkontroluj výše uvedenou chybu a klikni na „Načíst / obnovit data“ pro nový pokus.")
+    st.info("Zkontroluj chybové hlášky a klikni na „Načíst / obnovit data“ pro nový pokus.")
     st.stop()
 if load_errors:
     with st.expander("Neúplná data / chyby poskytovatele"):
