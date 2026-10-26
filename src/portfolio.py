@@ -28,16 +28,17 @@ def _apply_fill(
     side: str,
     commission: float,
     slippage: float,
+    other_fees: float,
     alm_tier: str | None,
     broker_confirmed: bool,
 ) -> None:
     side = side.upper()
-    if not ticker or price <= 0 or quantity < 0 or commission < 0 or slippage < 0 or target_usd < 0:
+    if not ticker or price <= 0 or quantity < 0 or commission < 0 or slippage < 0 or other_fees < 0 or target_usd < 0:
         raise ValueError("Ticker, cena, množství, cílová pozice a náklady musí být validní.")
     if side not in {"BUY", "SELL"}:
         raise ValueError("Neznámá strana obchodu.")
     notional = quantity * price
-    total_cost = commission + slippage
+    total_cost = commission + slippage + other_fees
     if side == "BUY":
         if notional + total_cost > state.cash_usd + 1e-6:
             raise ValueError("Nedostatek hotovosti pro simulovaný/potvrzený nákup.")
@@ -71,15 +72,16 @@ def _apply_fill(
 def apply_confirmed_fill(
     state: PortfolioState, ticker: str, target_usd: float, quantity: float,
     price: float, side: str, commission: float = 0.0, alm_tier: str | None = None,
+    other_fees: float = 0.0,
 ) -> None:
     """Update state after a broker-reported fill; only this function marks broker confirmation."""
-    _apply_fill(state, ticker, target_usd, quantity, price, side, commission, 0.0, alm_tier, True)
+    _apply_fill(state, ticker, target_usd, quantity, price, side, commission, 0.0, other_fees, alm_tier, True)
 
 
 def apply_simulated_fill(
     state: PortfolioState, ticker: str, target_usd: float, quantity: float,
     price: float, side: str, commission: float = 0.0, slippage: float = 0.0,
-    alm_tier: str | None = None,
+    alm_tier: str | None = None, other_fees: float = 0.0,
 ) -> None:
     """Record an explicitly user-confirmed paper-ledger fill; never claims broker execution."""
-    _apply_fill(state, ticker, target_usd, quantity, price, side, commission, slippage, alm_tier, False)
+    _apply_fill(state, ticker, target_usd, quantity, price, side, commission, slippage, other_fees, alm_tier, False)
