@@ -71,11 +71,24 @@ if run_button:
     tickers = list(dict.fromkeys((*universe, "SPY")))
     market_data: dict[str, pd.DataFrame] = {}
     errors: list[str] = []
+    bulk_data = None
+    if source_name.startswith("Yahoo"):
+        try:
+            bulk_data = provider.get_many_daily_bars(tickers, warmup_start, fetch_end)
+        except Exception as exc:
+            errors.append(f"Hromadné načtení Yahoo Finance selhalo: {exc}")
+            bulk_data = {}
     progress = st.progress(0, text="Načítám historická denní OHLCV data…")
 
     for i, ticker in enumerate(tickers):
         try:
-            market_data[ticker] = provider.get_daily_bars(ticker, warmup_start, fetch_end).bars
+            if source_name.startswith("Yahoo"):
+                item = (bulk_data or {}).get(ticker)
+                if item is None or item.bars.empty:
+                    raise RuntimeError(item.warning if item is not None else "Ticker chybí v odpovědi Yahoo Finance.")
+            else:
+                item = provider.get_daily_bars(ticker, warmup_start, fetch_end)
+            market_data[ticker] = item.bars
         except Exception as exc:
             errors.append(f"{ticker}: {exc}")
         progress.progress((i + 1) / len(tickers), text=f"Načítání {ticker} ({i + 1}/{len(tickers)})")
