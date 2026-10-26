@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import date, timedelta
 import os
 
 import pandas as pd
 import streamlit as st
 
+from src.strategies.temacd_grid_search import parse_asset_params_json
 from src.strategies.temacd_rotation import (
     AGGRESSIVE_ASSETS,
     CORE_ASSETS,
@@ -50,6 +52,11 @@ with st.sidebar:
     target_risk_pct = st.number_input("Cílový risk na pozici (%)", min_value=0.1, max_value=10.0, value=1.0, step=0.1)
     max_weight_pct = st.number_input("Max. váha jednoho aktiva (%)", min_value=1.0, max_value=100.0, value=35.0, step=1.0)
     commission_bps = st.number_input("Komise (bps na stranu)", min_value=0.0, max_value=100.0, value=5.0, step=1.0)
+    grid_params_upload = st.file_uploader(
+        "Volitelné: per-asset parametry z walk-forward grid-search",
+        type=["json"],
+        help="Vygeneruj soubor příkazem scripts/run_temacd_grid_search.py. Bez souboru se použijí zdokumentované globální defaulty.",
+    )
     force_refresh = st.checkbox(
         "Vynutit nové stažení místo 6h cache", value=False,
         help="Použij jen při potřebě aktualizovat místní historickou cache; opakované stažení může trvat déle.",
@@ -60,6 +67,14 @@ if run_button:
     if start_date >= end_date:
         st.error("Začátek musí být před koncem období.")
         st.stop()
+
+    asset_params = {}
+    if grid_params_upload is not None:
+        try:
+            asset_params = parse_asset_params_json(grid_params_upload.getvalue())
+        except (ValueError, UnicodeDecodeError) as exc:
+            st.error(f"Soubor per-asset parametrů není validní JSON: {exc}")
+            st.stop()
 
     if source_name.startswith("IBKR"):
         from src.data.ibkr_provider import IBKRProvider
@@ -110,6 +125,7 @@ if run_button:
             max_asset_weight=max_weight_pct / 100.0,
             transaction_cost_rate=commission_bps / 10_000.0,
             initial_equity=initial_equity,
+            asset_params=asset_params,
         )
         result = run_temacd_backtest(
             market_data,
@@ -149,6 +165,18 @@ if run_button:
 
     st.subheader("Equity křivka vs. SPY Buy & Hold")
     st.line_chart(pd.concat([result.equity, result.benchmark_equity], axis=1).sort_index())
+
+    with st.expander("Použité parametry TEMACD pro jednotlivá aktiva"):
+        rows = []
+        for ticker in universe:
+            parameters = asset_params.get(ticker)
+            row = asdict(parameters) if parameters is not None else {
+                "ema_fast": 10, "ema_mid": 30, "ema_slow": 120,
+                "macd_fast": 30, "macd_slow": 80, "macd_signal": 15,
+                "rsi_period": 14, "atr_period": 20,
+            }
+            rows.append({"ticker": ticker, "parameter_source": "grid-search JSON" if parameters is not None else "global default", **row})
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
     left, right = st.columns(2)
     with left:
