@@ -67,7 +67,7 @@ with st.sidebar:
     minimum = st.number_input("Min. komise USD/pokyn", min_value=0.0, value=0.35, step=0.05)
     extra = st.number_input("Další poplatky USD/akcii", min_value=0.0, value=0.0, step=0.0005, format="%.4f")
     slippage = st.select_slider("Slippage na stranu (bps)", options=[0, 5, 10, 25, 50], value=10)
-    cash_interest = st.number_input("Roční úročení hotovosti (0 = bez úroku)", min_value=0.0, max_value=0.10, value=0.0, step=0.0025, format="%.3f")
+    cash_interest = st.number_input("Roční úročení hotovosti (%)", min_value=0.0, max_value=10.0, value=0.0, step=0.25, format="%.2f", help="Zadej procenta p.a.; například 4.00 znamená 4 % ročně.") / 100.0
     fractional = st.checkbox("Povolit frakční kusy v simulaci", value=True)
     fetch = st.button("Načíst / obnovit data", type="primary", use_container_width=True)
     reset_portfolio = st.button("Resetovat lokální stínové portfolio", use_container_width=True)
