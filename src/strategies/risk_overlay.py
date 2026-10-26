@@ -46,6 +46,8 @@ def assess_market_regime(prices: dict[str, pd.DataFrame], config: StrategyConfig
     trend_below_200: dict[str, bool | None] = {}
     broken_20d_low = False
     crash_event = False
+    crash_event_recent = False
+    latest_crash_date: str | None = None
     for ticker, frame in (("SPY", spy), ("QQQ", qqq)):
         below_200: bool | None = None
         if frame is not None and not frame.empty and "Close" in frame:
@@ -66,24 +68,49 @@ def assess_market_regime(prices: dict[str, pd.DataFrame], config: StrategyConfig
                     broken_20d_low = broken_20d_low or last_close < prior_low
                 if len(frame) >= 22 and {"High", "Low", "Close"}.issubset(frame.columns):
                     tr = true_range(frame)
-                    prior_range = tr.rolling(20, min_periods=20).mean().shift(1).iloc[-1]
-                    today_range = tr.iloc[-1]
-                    prev_close = close.iloc[-2] if len(close) >= 2 else float("nan")
-                    daily_return = last_close / float(prev_close) - 1.0 if pd.notna(prev_close) and prev_close else 0.0
-                    metrics[f"{ticker.lower()}_daily_return_pct"] = daily_return
-                    if pd.notna(prior_range) and float(prior_range) > 0:
-                        range_multiple = float(today_range) / float(prior_range)
-                        metrics[f"{ticker.lower()}_range_multiple"] = range_multiple
-                        if daily_return <= config.risk_crash_daily_return and range_multiple >= config.risk_crash_range_multiple:
-                            crash_event = True
+                    prior_range_series = tr.rolling(20, min_periods=20).mean().shift(1)
+                    range_multiple_series = tr / prior_range_series.replace(0.0, float("nan"))
+                    daily_return_series = frame["Close"].astype(float).pct_change(fill_method=None)
+                    crash_flags = (
+                        (daily_return_series <= config.risk_crash_daily_return)
+                        & (range_multiple_series >= config.risk_crash_range_multiple)
+                    ).fillna(False)
+                    crash_flags = crash_flags.astype(bool)
+                    recent_flags = crash_flags.tail(config.risk_crash_cooldown_sessions)
+                    ticker_crash_recent = bool(recent_flags.any())
+                    ticker_crash_today = bool(crash_flags.iloc[-1])
+                    crash_event = crash_event or ticker_crash_today
+                    crash_event_recent = crash_event_recent or ticker_crash_recent
+                    if ticker_crash_recent:
+                        recent_dates = crash_flags.index[crash_flags]
+                        event_date = pd.Timestamp(recent_dates[-1])
+                        latest_crash_date = event_date.date().isoformat()
+                        if ticker_crash_today:
+                            daily_return = float(daily_return_series.iloc[-1])
+                            range_multiple = float(range_multiple_series.iloc[-1])
                             reasons.append(
-                                f"{ticker}: jednodenní pokles {daily_return:.1%} a rozsah {range_multiple:.1f}× předchozího průměru"
+                                f"{ticker}: jednodenní pokles {daily_return:.1%} a rozsah "
+                                f"{range_multiple:.1f}× předchozího průměru"
                             )
+                        else:
+                            reasons.append(
+                                f"{ticker}: crash spouštěč z {event_date.date()} zůstává aktivní "
+                                f"v ochranném okně {config.risk_crash_cooldown_sessions} seancí"
+                            )
+                    if pd.notna(daily_return_series.iloc[-1]):
+                        metrics[f"{ticker.lower()}_daily_return_pct"] = float(daily_return_series.iloc[-1])
+                    if pd.notna(range_multiple_series.iloc[-1]):
+                        metrics[f"{ticker.lower()}_range_multiple"] = float(range_multiple_series.iloc[-1])
+                    metrics[f"{ticker.lower()}_crash_event_today"] = ticker_crash_today
+                    metrics[f"{ticker.lower()}_crash_event_recent"] = ticker_crash_recent
         trend_below_200[ticker] = below_200
     metrics["spy_below_sma200"] = trend_below_200.get("SPY")
     metrics["qqq_below_sma200"] = trend_below_200.get("QQQ")
     metrics["broken_20d_low"] = broken_20d_low
     metrics["crash_event"] = crash_event
+    metrics["crash_event_recent"] = crash_event_recent
+    metrics["latest_crash_date"] = latest_crash_date
+    metrics["crash_cooldown_sessions"] = config.risk_crash_cooldown_sessions
 
     if vix_level is not None and vix_level >= config.risk_off_vix_threshold:
         reasons.append(f"VIX {vix_level:.1f} ≥ {config.risk_off_vix_threshold:.1f}")
@@ -123,12 +150,14 @@ def crisis_drawdown_candidate(
     allowed_tickers: set[str] | None = None,
 ) -> tuple[str, float] | None:
     """Returns (SPY/QQQ, drawdown) when risk-off plus configured crisis DD is met."""
-    if not config.crisis_alm_enabled:
+    if not config.crisis_alm_enabled or not config.risk_overlay_enabled:
         return None
     assessment = assess_market_regime(prices, config)
     if not assessment.risk_off:
         return None
-    if assessment.metrics.get("crash_event") is not True:
+    # The shock signal remains valid for a few sessions so a current Matrix position
+    # can be liquidated first and the ALM starter entered at the next feasible Open.
+    if assessment.metrics.get("crash_event_recent") is not True:
         return None
     eligible: list[tuple[str, float]] = []
     for ticker in ("SPY", "QQQ"):
