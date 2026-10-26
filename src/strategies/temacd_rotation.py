@@ -69,6 +69,9 @@ class TEMACDConfig:
     # Optional per-asset parameters produced by the grid-search runner.
     # Empty mapping deliberately uses the documented global defaults.
     asset_params: dict[str, TEMACDAssetParams] = field(default_factory=dict)
+    combined_aggressive_group_cap: float = 0.50
+    combined_crypto_group_cap: float = 0.25
+    combined_leveraged_group_cap: float = 0.35
 
     def __post_init__(self) -> None:
         periods = (self.ema_fast, self.ema_mid, self.ema_slow, self.macd_fast, self.macd_slow,
@@ -110,6 +113,12 @@ class TEMACDConfig:
             raise ValueError("Cílový risk na pozici musí být v intervalu (0, 10 %].")
         if not 0 < self.max_asset_weight <= 1:
             raise ValueError("Maximální váha musí být v intervalu (0, 100 %].")
+        if not 0 < self.combined_aggressive_group_cap <= 1:
+            raise ValueError("Combined aggressive group cap musí být v intervalu (0, 100 %].")
+        if not 0 < self.combined_crypto_group_cap <= 1:
+            raise ValueError("Combined crypto group cap musí být v intervalu (0, 100 %].")
+        if not 0 < self.combined_leveraged_group_cap <= 1:
+            raise ValueError("Combined leveraged group cap musí být v intervalu (0, 100 %].")
         if not 0 <= self.transaction_cost_rate < 0.1:
             raise ValueError("Transakční poplatek musí být v intervalu [0, 10 %).")
         if self.initial_equity <= 0:
@@ -275,9 +284,11 @@ def _period_key(day: pd.Timestamp, rebalance: str) -> tuple[int, ...]:
 
 
 def _target_weights(
-    eligible: list[tuple[str, float, float]], config: TEMACDConfig,
+    eligible: list[tuple[str, float, float]],
+    config: TEMACDConfig,
+    apply_combined_group_caps: bool = False,
 ) -> dict[str, float]:
-    """Apply weight = target risk / ATR%, per-asset cap, then 100% gross cap."""
+    """Inverse-ATR weights, per-asset cap, optional Combined group caps and 100% gross cap."""
     if not eligible:
         return {}
     raw: dict[str, float] = {}
@@ -285,6 +296,22 @@ def _target_weights(
         if not np.isfinite(atr_pct) or atr_pct <= 0:
             continue
         raw[asset] = min(config.max_asset_weight, config.target_risk / atr_pct)
+
+    def cap_group(tickers: tuple[str, ...], group_cap: float) -> None:
+        group_total = sum(raw.get(ticker, 0.0) for ticker in tickers)
+        if group_total > group_cap and group_total > 0:
+            scale = group_cap / group_total
+            for ticker in tickers:
+                if ticker in raw:
+                    raw[ticker] *= scale
+
+    if apply_combined_group_caps:
+        # Apply the narrower group caps first so the total aggressive cap cannot
+        # re-expand crypto or leveraged exposures above their configured limits.
+        cap_group(("BTC-USD", "ETH-USD", "SOL-USD"), config.combined_crypto_group_cap)
+        cap_group(("TQQQ", "SOXL"), config.combined_leveraged_group_cap)
+        cap_group(AGGRESSIVE_ASSETS, config.combined_aggressive_group_cap)
+
     gross = sum(raw.values())
     if gross > 1.0:
         raw = {asset: weight / gross for asset, weight in raw.items()}
@@ -495,10 +522,12 @@ def run_temacd_backtest(
                     eligible.append((asset, score, atr_pct))
             eligible.sort(key=lambda item: item[1], reverse=True)
             selected = eligible[:cfg.top_n]
-            target_weights = _target_weights(selected, cfg)
+            combined_mode = bool(set(universe) & set(CORE_ASSETS)) and bool(set(universe) & set(AGGRESSIVE_ASSETS))
+            target_weights = _target_weights(selected, cfg, apply_combined_group_caps=combined_mode)
             reason = (
                 f"{cfg.rebalance} rotation; Top {cfg.top_n}; EMA3 trend filter + bullish TEMACD; "
                 f"fresh cross in last {cross_window} bars unless already held; "
+                f"Combined group caps={'ON' if combined_mode else 'OFF'}; "
                 f"selected={','.join(target_weights) or 'CASH'}"
             )
             # Scheduled rotation supersedes the daily-exit target from the same Close.
@@ -528,7 +557,8 @@ def run_temacd_backtest(
                 weight_rows.append({"signal_timestamp": day, "ticker": asset, "ATR_pct": atr_pct,
                                     "target_weight": weight, "momentum_score": score,
                                     "selected": asset in target_weights,
-                                    "bullish_cross_recent": bullish_cross_recent})
+                                    "bullish_cross_recent": bullish_cross_recent,
+                                    "combined_group_caps_applied": combined_mode})
 
     equity = pd.Series(dict(equity_rows), dtype=float).sort_index().rename("TEMACD Strategy")
     benchmark = pd.Series(dict(benchmark_rows), dtype=float).sort_index().rename("SPY Buy & Hold")
