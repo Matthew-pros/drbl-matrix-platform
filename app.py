@@ -50,6 +50,10 @@ with st.sidebar:
         risk_vix_spike_threshold = st.slider("Růst VIX za 5 seancí (%)", 10, 100, 35, 5) / 100.0
         risk_crash_daily_return = st.slider("Denní pokles pro crash tripwire (%)", -10, -1, -4, 1) / 100.0
         risk_crash_range_multiple = st.number_input("Rozsah svíčky / průměrný rozsah", 1.5, 6.0, 3.0, 0.5)
+        risk_crash_cooldown_sessions = st.slider(
+            "Crash spouštěč platí (obchodní seance)", min_value=1, max_value=10, value=5,
+            help="Umožní nejprve uzavřít Matrix pozici a až potom otevřít krizový ALM starter.",
+        )
         crisis_alm_enabled = st.checkbox("Povolit krizový starter pouze pro SPY/QQQ", value=True)
         crisis_alm_drawdown = st.slider("Minimální drawdown pro krizový starter (%)", 10, 40, 15, 5) / 100.0
         crisis_alm_allocation = st.slider("Velikost krizového starteru (% equity)", 5, 20, 10, 5) / 100.0
@@ -83,6 +87,7 @@ config = StrategyConfig(
     risk_vix_spike_threshold=risk_vix_spike_threshold,
     risk_crash_daily_return=risk_crash_daily_return,
     risk_crash_range_multiple=risk_crash_range_multiple,
+    risk_crash_cooldown_sessions=risk_crash_cooldown_sessions,
     crisis_alm_enabled=crisis_alm_enabled,
     crisis_alm_drawdown=crisis_alm_drawdown,
     crisis_alm_allocation=crisis_alm_allocation,
@@ -189,7 +194,16 @@ if not market_data:
 if load_errors:
     with st.expander("Neúplná data / chyby poskytovatele"):
         st.code(load_errors)
-last_timestamp = max(pd.Timestamp(frame.index[-1]).to_pydatetime() for frame in market_data.values() if not frame.empty)
+# Use the last completed SPY exchange session as the strategy timestamp. Crypto has
+# weekend bars; using its newest timestamp would falsely date ETF signals on Saturday/Sunday.
+spy_history = market_data.get("SPY")
+if spy_history is not None and not spy_history.empty:
+    last_timestamp = pd.Timestamp(spy_history.index[-1]).to_pydatetime()
+else:
+    last_timestamp = max(
+        pd.Timestamp(frame.index[-1]).to_pydatetime()
+        for frame in market_data.values() if not frame.empty
+    )
 
 # Každý model má zcela vlastní stav.
 state_key = f"portfolio_{model.value}"
