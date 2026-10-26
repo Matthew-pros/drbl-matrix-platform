@@ -1,4 +1,4 @@
-from src.models import ModelName, PortfolioState
+from src.models import ModelName, PortfolioState, Position
 from src.portfolio import apply_confirmed_fill, mark_to_market
 
 
@@ -66,7 +66,7 @@ def test_simulated_sell_includes_slippage_and_removes_empty_position():
     state = PortfolioState(
         ModelName.DRBL_MATRIX,
         cash_usd=0.0,
-        positions={"QQQ": __import__("src.models", fromlist=["Position"]).Position("QQQ", 1_000.0, 10.0, 100.0)},
+        positions={"QQQ": Position("QQQ", 1_000.0, 10.0, 100.0)},
     )
     apply_simulated_fill(
         state, "QQQ", target_usd=0.0, quantity=10.0,
