@@ -15,6 +15,7 @@ from src.data.yfinance_provider import YahooFinanceProvider
 from src.models import DataMode, ModelName, PortfolioState
 from src.services.recommendation_service import recommend
 from src.storage import list_backtests, save_backtest
+from src.portfolio import apply_simulated_fill, mark_to_market
 from src.strategies.drbl_matrix import ASSETS, process_monthly_rotation
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -69,6 +70,7 @@ with st.sidebar:
     cash_interest = st.number_input("Roční úročení hotovosti (0 = bez úroku)", min_value=0.0, max_value=0.10, value=0.0, step=0.0025, format="%.3%")
     fractional = st.checkbox("Povolit frakční kusy v simulaci", value=True)
     fetch = st.button("Načíst / obnovit data", type="primary", use_container_width=True)
+    reset_portfolio = st.button("Resetovat lokální stínové portfolio", use_container_width=True)
 
 config = StrategyConfig(
     initial_equity=initial_equity,
@@ -163,11 +165,17 @@ last_timestamp = max(pd.Timestamp(frame.index[-1]).to_pydatetime() for frame in 
 
 # Každý model má zcela vlastní stav.
 state_key = f"portfolio_{model.value}"
-if state_key not in st.session_state:
+if state_key not in st.session_state or reset_portfolio:
     st.session_state[state_key] = PortfolioState(model, initial_equity)
 state: PortfolioState = st.session_state[state_key]
 if not state.positions and abs(state.cash_usd - initial_equity) > 1e-6:
     state.cash_usd = initial_equity
+latest_prices = {
+    ticker: float(frame["Close"].iloc[-1])
+    for ticker, frame in market_data.items()
+    if frame is not None and not frame.empty and pd.notna(frame["Close"].iloc[-1])
+}
+mark_to_market(state, latest_prices)
 
 # Rotaci vyhodnoť pouze ve vhodný plánovaný den; nikdy ji nespouštěj z denního signálu mimo plán.
 if model == ModelName.DRBL_MATRIX or (
@@ -245,6 +253,35 @@ if view in {"Dashboard", "Denní doporučení"}:
                     "Slippage USD": preview.slippage_usd, "Status": preview.status,
                     "Zdroj ceny": rec.source, "Timestamp": rec.as_of,
                 }]), use_container_width=True, hide_index=True)
+                st.caption("Volitelné: zaznamenej simulovaný fill pouze do lokálního stínového portfolia. Tím se nemění broker ani se neodesílá skutečný pokyn.")
+                if preview.side in {"BUY", "SELL"} and preview.estimated_quantity > 0:
+                    if st.button(
+                        "Zaznamenat simulovaný fill",
+                        key=f"sim_fill_{model.value}_{rec.ticker}_{rec.action}",
+                        type="secondary",
+                    ):
+                        alm_tier = rec.indicators.get("alm_tier")
+                        if alm_tier != "crash_event" or rec.ticker not in {"SPY", "QQQ"}:
+                            alm_tier = None
+                        try:
+                            apply_simulated_fill(
+                                state,
+                                ticker=preview.ticker,
+                                target_usd=preview.target_usd,
+                                quantity=preview.estimated_quantity,
+                                price=preview.estimated_price,
+                                side=preview.side,
+                                commission=preview.commission_usd,
+                                slippage=preview.slippage_usd,
+                                alm_tier=alm_tier,
+                            )
+                            st.success(
+                                f"Simulovaný fill {preview.side} {preview.ticker} byl zaznamenán. "
+                                "Nejde o brokerem potvrzený fill a žádný skutečný příkaz nebyl odeslán."
+                            )
+                            st.rerun()
+                        except ValueError as exc:
+                            st.error(f"Simulovaný fill nebyl zaznamenán: {exc}")
             elif rec.action not in {"HOLD", "HOLD_CASH"}:
                 st.warning("Chybí cena přesného cílového tickeru; automatický order preview se nevytváří.")
         if rec.indicators:
