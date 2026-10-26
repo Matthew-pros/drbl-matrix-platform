@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, timedelta
 
 import pandas as pd
@@ -37,8 +38,15 @@ with st.sidebar:
     initial_equity = st.number_input("Počáteční equity (USD)", min_value=100.0, value=100_000.0, step=5_000.0)
     start_date = st.date_input("Začátek vyhodnocení", value=date.today() - timedelta(days=365 * 5), max_value=date.today())
     end_date = st.date_input("Konec vyhodnocení", value=date.today(), min_value=start_date, max_value=date.today())
-    source_kind = st.selectbox("Datový zdroj", ["Yahoo Finance · historical", "IBKR Gateway · read-only historical"])
-    st.caption("Yahoo Finance = historická data; IBKR Gateway = historická/read-only data. Nejde o garantovaný live feed.")
+    ibkr_enabled = os.getenv("IBKR_ENABLED", "false").strip().lower() == "true"
+    source_options = ["Yahoo Finance · historical"]
+    if ibkr_enabled:
+        source_options.append("IBKR Gateway · read-only historical")
+    source_kind = st.selectbox("Datový zdroj", source_options)
+    if ibkr_enabled:
+        st.caption("IBKR Gateway = historická/read-only data. Nejde o garantovaný live feed.")
+    else:
+        st.caption("Streamlit Cloud používá Yahoo Finance. IBKR volba se zobrazí jen na VPS při IBKR_ENABLED=true.")
     st.divider()
     risk_overlay_enabled = st.checkbox(
         "Zapnout risk-off ochranu", value=True,
