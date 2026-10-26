@@ -166,7 +166,9 @@ if not state.positions and abs(state.cash_usd - initial_equity) > 1e-6:
     state.cash_usd = initial_equity
 
 # Rotaci vyhodnoť pouze ve vhodný plánovaný den; nikdy ji nespouštěj z denního signálu mimo plán.
-if model == ModelName.DRBL_MATRIX or (model == ModelName.COMBINED and state.alm_completed and state.alm_fill_confirmed):
+if model == ModelName.DRBL_MATRIX or (
+    model == ModelName.COMBINED and state.active_alm_ticker is None
+):
     rotation_date = last_timestamp.date().isoformat()
     rotation_frames = {asset: market_data[asset] for asset in ASSETS if asset in market_data}
     try:
