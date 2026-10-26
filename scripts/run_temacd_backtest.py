@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -24,6 +25,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data.yfinance_provider import YahooFinanceProvider
+from src.strategies.temacd_grid_search import load_asset_params_file
 from src.strategies.temacd_rotation import TEMACDConfig, TEMACD_UNIVERSE, run_temacd_backtest
 
 
@@ -46,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--macd-signal", type=int, default=15)
     parser.add_argument("--atr-period", type=int, default=20)
     parser.add_argument("--rsi-period", type=int, default=14)
+    parser.add_argument("--params-file", default=None, help="Optional JSON created by scripts/run_temacd_grid_search.py")
     parser.add_argument("--output-dir", default="outputs/temacd")
     return parser.parse_args()
 
@@ -79,6 +82,7 @@ def main() -> int:
         market_data[ticker] = item.bars
         print(f"  {ticker:8} {len(item.bars):5} bars, last={item.last_timestamp}")
 
+    asset_params = load_asset_params_file(args.params_file) if args.params_file else {}
     config = TEMACDConfig(
         ema_fast=args.ema_fast, ema_mid=args.ema_mid, ema_slow=args.ema_slow,
         macd_fast=args.macd_fast, macd_slow=args.macd_slow, macd_signal=args.macd_signal,
@@ -87,6 +91,7 @@ def main() -> int:
         max_asset_weight=args.max_weight_pct / 100.0,
         transaction_cost_rate=args.transaction_cost_bps / 10_000.0,
         initial_equity=args.initial_equity,
+        asset_params=asset_params,
     )
     result = run_temacd_backtest(market_data, config, args.start, args.end)
     output_dir = (ROOT / args.output_dir).resolve() if not Path(args.output_dir).is_absolute() else Path(args.output_dir)
@@ -102,6 +107,8 @@ def main() -> int:
             "ema": [args.ema_fast, args.ema_mid, args.ema_slow],
             "temacd": [args.macd_fast, args.macd_slow, args.macd_signal],
             "atr_period": args.atr_period, "rsi_period": args.rsi_period,
+            "params_file": args.params_file,
+            "per_asset_params": {ticker: asdict(params) for ticker, params in asset_params.items()},
         },
         "temacd": result.metrics,
         "spy_buy_hold": result.benchmark_metrics,
