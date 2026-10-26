@@ -129,3 +129,16 @@ python scripts/run_temacd_period_table.py --end 2026-10-24 --warmup-years 3
 ```
 
 Tabulky, data coverage, metadata a equity grafy se uloží do `outputs/temacd_periods/`. Bez připojení ke zdroji historických dat nelze důvěryhodně vyplnit metriky; viz [`PERFORMANCE_METRICS.md`](PERFORMANCE_METRICS.md). Uvedené referenční hodnoty v uživatelském zadání jsou proto označené jako neověřené ilustrativní hypotézy.
+
+### Per-asset TEMACD grid search (walk-forward)
+
+Výchozí parametry bez souboru jsou globální 10/30/120 EMA, 30/80/15 TEMA-MACD, RSI 14 a ATR 20. Nejsou vydávány za optimalizované hodnoty. Pro výběr vlastních parametrů pro každý ticker spusť samostatný grid-search; vybírá pouze z in-sample okna a pozdější OOS okno slouží jen k reportingu:
+
+    python scripts/run_temacd_grid_search.py --end 2026-10-26 --train-years 5 --oos-years 2 --warmup-years 3
+
+Výstup outputs/temacd_grid/asset_params.json obsahuje vybrané parametry pro jednotlivá aktiva, grid_candidates.csv všechny kandidáty a out_of_sample_metrics.csv samostatné OOS metriky. Použij výsledný JSON pro nový backtest:
+
+    python scripts/run_temacd_backtest.py --start 2021-10-26 --end 2026-10-26 --params-file outputs/temacd_grid/asset_params.json
+    python scripts/run_temacd_period_table.py --end 2026-10-26 --params-file outputs/temacd_grid/asset_params.json
+
+Stejný JSON lze nahrát v sekci Streamlit TEMACD Rotace. Pokud grid-search nenajde robustního kandidáta s minimálním počtem transakcí, použije výchozí parametry a výsledek označí jako fallback. Optimalizace je výzkumný nástroj, nikoli záruka budoucí výkonnosti.
