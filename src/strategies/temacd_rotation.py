@@ -13,7 +13,7 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
-from ..indicators import atr_wilder, normalize_ohlcv
+from ..indicators import atr_wilder, normalize_ohlcv, rolling_drawdown, true_range
 
 CORE_ASSETS: tuple[str, ...] = (
     "SPY", "QQQ", "XLK", "XLY", "XLI", "XLV", "XLF", "XLE", "XLP", "XLU",
@@ -166,6 +166,7 @@ class TEMACDBacktestResult:
     indicators: dict[str, pd.DataFrame] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     total_transaction_costs: float = 0.0
+    regime_log: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def _ema(series: pd.Series, period: int) -> pd.Series:
@@ -345,6 +346,145 @@ def _target_weights(
     if gross > 1.0:
         raw = {asset: weight / gross for asset, weight in raw.items()}
     return raw
+
+
+def _market_regime_history(
+    normalized: dict[str, pd.DataFrame],
+    dates: pd.DatetimeIndex,
+    config: TEMACDConfig,
+) -> pd.DataFrame:
+    """Vectorized, point-in-time market regimes built only from current and prior daily bars."""
+    spy = normalized["SPY"]
+    spy_close_full = spy["Close"].astype(float)
+    spy_close = spy_close_full.reindex(dates)
+    spy_sma200 = spy_close_full.rolling(200, min_periods=200).mean().reindex(dates)
+    spy_below = (spy_close < spy_sma200).fillna(False)
+    spy_valid_trend = spy_sma200.notna() & spy_close.notna()
+    spy_drawdown = rolling_drawdown(spy_close_full).reindex(dates)
+    spy_break_low = (
+        spy_close_full < spy["Low"].rolling(20, min_periods=20).min().shift(1)
+    ).reindex(dates).fillna(False)
+    spy_tr = true_range(spy)
+    spy_range_multiple = (
+        spy_tr / spy_tr.rolling(20, min_periods=20).mean().shift(1).replace(0.0, np.nan)
+    ).reindex(dates)
+    spy_daily_return = spy_close_full.pct_change(fill_method=None).reindex(dates)
+    spy_crash = (
+        (spy_daily_return <= config.risk_crash_daily_return)
+        & (spy_range_multiple >= config.risk_crash_range_multiple)
+    ).fillna(False)
+
+    qqq = normalized.get("QQQ")
+    if qqq is not None and not qqq.empty:
+        qqq_close_full = qqq["Close"].astype(float)
+        qqq_close = qqq_close_full.reindex(dates)
+        qqq_sma200 = qqq_close_full.rolling(200, min_periods=200).mean().reindex(dates)
+        qqq_below = (qqq_close < qqq_sma200).fillna(False)
+        qqq_valid_trend = qqq_sma200.notna() & qqq_close.notna()
+        qqq_drawdown = rolling_drawdown(qqq_close_full).reindex(dates)
+        qqq_break_low = (
+            qqq_close_full < qqq["Low"].rolling(20, min_periods=20).min().shift(1)
+        ).reindex(dates).fillna(False)
+        qqq_tr = true_range(qqq)
+        qqq_range_multiple = (
+            qqq_tr / qqq_tr.rolling(20, min_periods=20).mean().shift(1).replace(0.0, np.nan)
+        ).reindex(dates)
+        qqq_daily_return = qqq_close_full.pct_change(fill_method=None).reindex(dates)
+        qqq_crash = (
+            (qqq_daily_return <= config.risk_crash_daily_return)
+            & (qqq_range_multiple >= config.risk_crash_range_multiple)
+        ).fillna(False)
+    else:
+        qqq_below = pd.Series(False, index=dates)
+        qqq_valid_trend = pd.Series(False, index=dates)
+        qqq_drawdown = pd.Series(np.nan, index=dates)
+        qqq_break_low = pd.Series(False, index=dates)
+        qqq_crash = pd.Series(False, index=dates)
+
+    vix = normalized.get("VIX")
+    if vix is not None and not vix.empty:
+        vix_close_full = vix["Close"].astype(float)
+        # Reindex to SPY sessions before the five-session change calculation.
+        vix_close = vix_close_full.reindex(dates).ffill()
+        vix_change_5d = vix_close.pct_change(5, fill_method=None)
+        vix_available = vix_close.notna()
+    else:
+        vix_close = pd.Series(np.nan, index=dates, dtype=float)
+        vix_change_5d = pd.Series(np.nan, index=dates, dtype=float)
+        vix_available = pd.Series(False, index=dates)
+
+    crash_today = (spy_crash | qqq_crash).reindex(dates).fillna(False).astype(bool)
+    crash_recent = (
+        crash_today.astype(int)
+        .rolling(config.risk_crash_cooldown_sessions, min_periods=1)
+        .max()
+        .astype(bool)
+    )
+    deep_drawdown = ((spy_drawdown >= 0.30) | (qqq_drawdown >= 0.30)).fillna(False)
+    high_vix = (vix_close >= config.risk_off_vix_threshold).fillna(False)
+    vix_spike = (
+        (vix_close >= config.risk_vix_spike_minimum)
+        & (vix_change_5d >= config.risk_vix_spike_threshold)
+    ).fillna(False)
+    trend_stress = (
+        (vix_close >= config.risk_elevated_vix_threshold)
+        & spy_below
+        & qqq_below
+    ).fillna(False)
+    low_break_stress = (
+        (vix_close >= config.risk_elevated_vix_threshold)
+        & (spy_break_low | qqq_break_low)
+    ).fillna(False)
+    risk_off = (deep_drawdown | crash_recent | high_vix | vix_spike | trend_stress | low_break_stress).astype(bool)
+
+    # If VIX is missing, degrade transparently to a SPY/QQQ trend-only risk-on test.
+    both_trends_valid = spy_valid_trend & qqq_valid_trend
+    both_above = (~spy_below) & (~qqq_below)
+    low_or_missing_vix = (vix_close < 20.0) | (~vix_available)
+    risk_on = (~risk_off) & both_trends_valid & both_above & low_or_missing_vix
+    transition = ~(risk_off | risk_on)
+
+    reasons: list[str] = []
+    for day in dates:
+        why: list[str] = []
+        if bool(deep_drawdown.loc[day]):
+            why.append("SPY/QQQ drawdown ≥30 %")
+        if bool(crash_recent.loc[day]):
+            why.append(f"flash-crash trigger active within {config.risk_crash_cooldown_sessions} SPY sessions")
+        if bool(high_vix.loc[day]):
+            why.append(f"VIX ≥ {config.risk_off_vix_threshold:g}")
+        if bool(vix_spike.loc[day]):
+            why.append(f"VIX 5-session rise ≥ {config.risk_vix_spike_threshold:.0%}")
+        if bool(trend_stress.loc[day]):
+            why.append("SPY and QQQ below SMA200 with elevated VIX")
+        if bool(low_break_stress.loc[day]):
+            why.append("20-session low break with elevated VIX")
+        if bool(risk_off.loc[day]):
+            reasons.append("; ".join(why) or "risk-off trigger")
+        elif bool(risk_on.loc[day]) and not bool(vix_available.loc[day]):
+            reasons.append("SPY/QQQ above SMA200; VIX unavailable, degraded trend-only mode")
+        elif bool(risk_on.loc[day]):
+            reasons.append("SPY/QQQ above SMA200 and VIX below 20")
+        elif not bool(vix_available.loc[day]):
+            reasons.append("TRANSITION: VIX unavailable; trend/crash-only assessment")
+        else:
+            reasons.append("TRANSITION: mixed trend/volatility signals")
+
+    regimes = np.where(risk_off, "RISK_OFF", np.where(risk_on, "RISK_ON", "TRANSITION"))
+    return pd.DataFrame({
+        "raw_market_regime": regimes,
+        "raw_risk_off": risk_off,
+        "raw_risk_on": risk_on,
+        "reason": reasons,
+        "vix_level": vix_close,
+        "vix_change_5d": vix_change_5d,
+        "spy_below_sma200": spy_below,
+        "qqq_below_sma200": qqq_below,
+        "spy_drawdown": spy_drawdown,
+        "qqq_drawdown": qqq_drawdown,
+        "crash_event_today": crash_today,
+        "crash_event_recent": crash_recent,
+    }, index=dates)
 
 
 def run_temacd_backtest(
