@@ -134,6 +134,14 @@ if run_button:
     m4.metric("Max. drawdown", f"-{result.metrics.get('max_drawdown', float('nan')):.2%}")
     m5.metric("Sharpe", f"{result.metrics.get('sharpe', float('nan')):.2f}")
     m6.metric("Sortino", f"{result.metrics.get('sortino', float('nan')):.2f}")
+    m7, m8, m9 = st.columns(3)
+    profit_factor = float(result.metrics.get("profit_factor", float("nan")))
+    profit_factor_text = "∞" if profit_factor == float("inf") else (
+        f"{profit_factor:.2f}" if pd.notna(profit_factor) else "N/A"
+    )
+    m7.metric("Profit Factor (realizované obchody)", profit_factor_text)
+    m8.metric("Calmar", f"{result.metrics.get('calmar', float('nan')):.2f}")
+    m9.metric("Transakční náklady", f"${result.total_transaction_costs:,.2f}")
 
     st.subheader("Equity křivka vs. SPY Buy & Hold")
     st.line_chart(pd.concat([result.equity, result.benchmark_equity], axis=1).sort_index())
